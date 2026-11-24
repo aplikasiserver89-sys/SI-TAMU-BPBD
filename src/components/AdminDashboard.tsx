@@ -2,16 +2,12 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   BarChart3,
   Building2,
-  Calendar,
-  CalendarRange,
   CheckCircle2,
   ClipboardList,
   Clock,
   Download,
   Eye,
   FileSpreadsheet,
-  History,
-  IdCard,
   Lock,
   Printer,
   QrCode,
@@ -58,6 +54,7 @@ import { AdminManagementPanel } from './AdminManagementPanel';
 
 type DashboardTab = 'records' | 'recap' | 'qr' | 'departments' | 'users' | 'audit';
 type QuickPreset = 'all' | 'today' | 'week' | 'month' | 'year' | 'last_year';
+type BreakdownTab = 'department' | 'category';
 
 interface AdminDashboardProps {
   token: string;
@@ -104,15 +101,15 @@ export function AdminDashboard({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  // Filters
+  // Filters — default strictly to Today ("Hanya Tamu Hari Ini")
   const [search, setSearch] = useState('');
   const [departmentFilter, setDepartmentFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
-  const [dateFrom, setDateFrom] = useState(() => (isResepsionis ? getTodayWib() : ''));
-  const [dateTo, setDateTo] = useState(() => (isResepsionis ? getTodayWib() : ''));
-  const [quickPreset, setQuickPreset] = useState<QuickPreset>(() =>
-    isResepsionis ? 'today' : 'all',
-  );
+  const [dateFrom, setDateFrom] = useState(() => getTodayWib());
+  const [dateTo, setDateTo] = useState(() => getTodayWib());
+  const [quickPreset, setQuickPreset] = useState<QuickPreset>('today');
+  const [selectedRecapKey, setSelectedRecapKey] = useState<QuickPreset>('today');
+  const [breakdownTab, setBreakdownTab] = useState<BreakdownTab>('department');
 
   // Modals & Row Actions
   const [showManualModal, setShowManualModal] = useState(false);
@@ -189,8 +186,9 @@ export function AdminDashboard({
   }, [fetchDashboard]);
 
   const applyQuickPreset = (preset: QuickPreset, switchToRecords = false) => {
-    if (isResepsionis) return;
+    if (isResepsionis && preset !== 'today') return;
     setQuickPreset(preset);
+    setSelectedRecapKey(preset);
     setStatusFilter('');
     const today = getTodayWib();
     if (preset === 'all') {
@@ -350,7 +348,7 @@ export function AdminDashboard({
           <div className="flex flex-wrap items-center gap-1 p-1 bg-white/10 border border-white/15 rounded-xl self-start">
             <button
               type="button"
-              onClick={() => setActiveTab('records')}
+              onClick={() => applyQuickPreset('today', true)}
               className={`inline-flex items-center gap-2 px-3.5 py-2 min-h-[40px] text-xs sm:text-sm font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 ${
                 activeTab === 'records'
                   ? 'bg-[#EA580C] text-white shadow-sm'
@@ -358,7 +356,7 @@ export function AdminDashboard({
               }`}
             >
               <Users className="w-4 h-4 shrink-0" aria-hidden="true" />
-              <span>{isResepsionis ? 'Tamu Hari Ini' : 'Daftar Tamu'}</span>
+              <span>Tamu Hari Ini</span>
             </button>
 
             <button
@@ -452,367 +450,291 @@ export function AdminDashboard({
           </div>
         )}
 
-        {/* Vibrant Colorful KPI Summary Tiles (Inspired by Reference Photo) */}
-        <section
-          aria-label="Ringkasan Statistik Kunjungan"
-          className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4"
-        >
-          {/* 1. Tamu Hari Ini - Biru Cerah */}
-          <button
-            type="button"
-            onClick={() => {
-              if (!isResepsionis) applyQuickPreset('today', true);
-              else {
-                setStatusFilter('');
-                setActiveTab('records');
-              }
-            }}
-            className="text-left bg-gradient-to-br from-[#007BFF] to-[#0056CC] hover:brightness-105 text-white rounded-xl p-5 shadow-lg transition-all flex items-center justify-between gap-4 border border-white/15"
-          >
-            <div className="min-w-0">
-              <p className="text-sm font-semibold text-white/95">Tamu Hari Ini</p>
-              <p className="mt-2 tabular-nums text-3xl sm:text-4xl font-bold leading-none">
-                {stats.totalToday}
-              </p>
-              <p className="mt-2 text-xs text-white/85">{formatShortDate(getTodayWib())}</p>
-            </div>
-            <UserCheck className="w-12 h-12 text-white/85 shrink-0" aria-hidden="true" />
-          </button>
-
-          {/* 2. Tamu Sedang Berkunjung - Oranye Cerah */}
-          <button
-            type="button"
-            onClick={() => {
-              setStatusFilter('Sedang Berkunjung');
-              setActiveTab('records');
-            }}
-            className="text-left bg-gradient-to-br from-[#EA580C] to-[#C2410C] hover:brightness-105 text-white rounded-xl p-5 shadow-lg transition-all flex items-center justify-between gap-4 border border-white/15"
-          >
-            <div className="min-w-0">
-              <p className="text-sm font-semibold text-white/95">Tamu Sedang Berkunjung</p>
-              <p className="mt-2 tabular-nums text-3xl sm:text-4xl font-bold leading-none">
-                {stats.activeNow}
-              </p>
-              <p className="mt-2 text-xs text-white/85">Belum Check-Out</p>
-            </div>
-            <Clock className="w-12 h-12 text-white/85 shrink-0" aria-hidden="true" />
-          </button>
-
-          {!isResepsionis ? (
-            <>
-              {/* 3. Tamu Minggu Ini - Cyan Toska */}
-              <button
-                type="button"
-                onClick={() => applyQuickPreset('week', true)}
-                className="text-left bg-gradient-to-br from-[#17A2B8] to-[#0E7490] hover:brightness-105 text-white rounded-xl p-5 shadow-lg transition-all flex items-center justify-between gap-4 border border-white/15"
+        {/* Dashboard KPI Tiles: Hanya Tamu Hari Ini */}
+        {activeTab === 'records' &&
+          (() => {
+            const todayRecap = stats.periodRecap?.find((item) => item.key === 'today');
+            const todayActive = todayRecap?.active ?? stats.activeNow;
+            const todayDone =
+              todayRecap?.done ?? Math.max(0, stats.totalToday - todayActive);
+            return (
+              <section
+                aria-label="Ringkasan Tamu Hari Ini"
+                className="grid grid-cols-1 sm:grid-cols-3 gap-3.5"
               >
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold text-white/95">Tamu Minggu Ini</p>
-                  <p className="mt-2 tabular-nums text-3xl sm:text-4xl font-bold leading-none">
-                    {stats.totalWeek}
-                  </p>
-                  <p className="mt-2 text-xs text-white/85">Senin – Hari ini</p>
-                </div>
-                <IdCard className="w-12 h-12 text-white/85 shrink-0" aria-hidden="true" />
-              </button>
+                {/* 1. Tamu Hari Ini - Biru Cerah */}
+                <button
+                  type="button"
+                  onClick={() => applyQuickPreset('today', true)}
+                  className="text-left bg-gradient-to-br from-[#007BFF] to-[#0056CC] hover:brightness-105 text-white rounded-xl p-4 sm:p-5 shadow-lg transition-all flex items-center justify-between gap-4 border border-white/15"
+                >
+                  <div className="min-w-0">
+                    <p className="text-xs sm:text-sm font-semibold text-white/95">
+                      Tamu Hari Ini
+                    </p>
+                    <p className="mt-1.5 tabular-nums text-3xl font-bold leading-none">
+                      {stats.totalToday}
+                    </p>
+                    <p className="mt-1.5 text-xs text-white/85">
+                      {formatShortDate(getTodayWib())}
+                    </p>
+                  </div>
+                  <UserCheck className="w-10 h-10 sm:w-11 sm:h-11 text-white/85 shrink-0" aria-hidden="true" />
+                </button>
 
-              {/* 4. Tamu Bulan Ini - Hijau Cerah */}
-              <button
-                type="button"
-                onClick={() => applyQuickPreset('month', true)}
-                className="text-left bg-gradient-to-br from-[#28A745] to-[#1E7E34] hover:brightness-105 text-white rounded-xl p-5 shadow-lg transition-all flex items-center justify-between gap-4 border border-white/15"
-              >
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold text-white/95">Tamu Bulan Ini</p>
-                  <p className="mt-2 tabular-nums text-3xl sm:text-4xl font-bold leading-none">
-                    {stats.totalMonth}
-                  </p>
-                  <p className="mt-2 text-xs text-white/85">Akumulasi bulan berjalan</p>
-                </div>
-                <CalendarRange className="w-12 h-12 text-white/85 shrink-0" aria-hidden="true" />
-              </button>
+                {/* 2. Tamu Sedang Berkunjung Hari Ini - Oranye Cerah */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (quickPreset !== 'today') {
+                      applyQuickPreset('today', true);
+                    }
+                    setStatusFilter('Sedang Berkunjung');
+                  }}
+                  className="text-left bg-gradient-to-br from-[#EA580C] to-[#C2410C] hover:brightness-105 text-white rounded-xl p-4 sm:p-5 shadow-lg transition-all flex items-center justify-between gap-4 border border-white/15"
+                >
+                  <div className="min-w-0">
+                    <p className="text-xs sm:text-sm font-semibold text-white/95">
+                      Sedang Berkunjung
+                    </p>
+                    <p className="mt-1.5 tabular-nums text-3xl font-bold leading-none">
+                      {todayActive}
+                    </p>
+                    <p className="mt-1.5 text-xs text-white/85">Belum Check-Out hari ini</p>
+                  </div>
+                  <Clock className="w-10 h-10 sm:w-11 sm:h-11 text-white/85 shrink-0" aria-hidden="true" />
+                </button>
 
-              {/* 5. Tamu Tahun Ini - Merah Cerah */}
-              <button
-                type="button"
-                onClick={() => applyQuickPreset('year', true)}
-                className="text-left bg-gradient-to-br from-[#DC3545] to-[#B02A37] hover:brightness-105 text-white rounded-xl p-5 shadow-lg transition-all flex items-center justify-between gap-4 border border-white/15"
-              >
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold text-white/95">
-                    Tamu Tahun Ini ({getTodayWib().slice(0, 4)})
-                  </p>
-                  <p className="mt-2 tabular-nums text-3xl sm:text-4xl font-bold leading-none">
-                    {stats.totalYear}
-                  </p>
-                  <p className="mt-2 text-xs text-white/85">Januari – Desember</p>
-                </div>
-                <Calendar className="w-12 h-12 text-white/85 shrink-0" aria-hidden="true" />
-              </button>
-
-              {/* 6. Tamu Tahun Lalu - Kuning Emas */}
-              <button
-                type="button"
-                onClick={() => applyQuickPreset('last_year', true)}
-                className="text-left bg-gradient-to-br from-[#E69B00] to-[#C67C00] hover:brightness-105 text-white rounded-xl p-5 shadow-lg transition-all flex items-center justify-between gap-4 border border-white/15"
-              >
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold text-white/95">
-                    Tamu Tahun Lalu ({getLastYearRangeWib().year})
-                  </p>
-                  <p className="mt-2 tabular-nums text-3xl sm:text-4xl font-bold leading-none">
-                    {stats.totalLastYear}
-                  </p>
-                  <p className="mt-2 text-xs text-white/90">Arsip tahun sebelumnya</p>
-                </div>
-                <History className="w-12 h-12 text-white/85 shrink-0" aria-hidden="true" />
-              </button>
-
-              {/* 7. Total Semua Tamu - Abu-abu Slate */}
-              <button
-                type="button"
-                onClick={() => applyQuickPreset('all', true)}
-                className="text-left bg-gradient-to-br from-[#6C757D] to-[#495057] hover:brightness-105 text-white rounded-xl p-5 shadow-lg transition-all flex items-center justify-between gap-4 border border-white/15"
-              >
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold text-white/95">Total Tamu</p>
-                  <p className="mt-2 tabular-nums text-3xl sm:text-4xl font-bold leading-none">
-                    {stats.totalAll}
-                  </p>
-                  <p className="mt-2 text-xs text-white/85">Seluruh kunjungan tercatat</p>
-                </div>
-                <Users className="w-12 h-12 text-white/85 shrink-0" aria-hidden="true" />
-              </button>
-
-              {/* 8. Bidang Terbanyak Dikunjungi - Biru Indigo */}
-              <div className="bg-gradient-to-br from-[#4F46E5] to-[#1E3A8A] text-white rounded-xl p-5 shadow-lg flex items-center justify-between gap-4 border border-white/15">
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold text-white/95">Bidang Terbanyak</p>
-                  <p className="mt-2 text-base font-bold leading-snug line-clamp-2">
-                    {stats.topDepartment ? stats.topDepartment.name : 'Belum ada data'}
-                  </p>
-                  <p className="mt-1.5 text-xs text-white/85 tabular-nums">
-                    {stats.topDepartment
-                      ? `${stats.topDepartment.count} kunjungan`
-                      : '0 kunjungan'}
-                  </p>
-                </div>
-                <Building2 className="w-11 h-11 text-white/85 shrink-0" aria-hidden="true" />
-              </div>
-            </>
-          ) : (
-            <>
-              {/* 3 (Resepsionis). Sudah Check-Out Hari Ini - Hijau Cerah */}
-              <button
-                type="button"
-                onClick={() => {
-                  setStatusFilter('Selesai');
-                  setActiveTab('records');
-                }}
-                className="text-left bg-gradient-to-br from-[#28A745] to-[#1E7E34] hover:brightness-105 text-white rounded-xl p-5 shadow-lg transition-all flex items-center justify-between gap-4 border border-white/15"
-              >
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold text-white/95">Sudah Check-Out</p>
-                  <p className="mt-2 tabular-nums text-3xl sm:text-4xl font-bold leading-none">
-                    {Math.max(0, stats.totalToday - stats.activeNow)}
-                  </p>
-                  <p className="mt-2 text-xs text-white/85">Selesai kunjungan hari ini</p>
-                </div>
-                <CheckCircle2 className="w-12 h-12 text-white/85 shrink-0" aria-hidden="true" />
-              </button>
-
-              {/* 4 (Resepsionis). Bidang Terbanyak - Biru Indigo */}
-              <div className="bg-gradient-to-br from-[#4F46E5] to-[#1E3A8A] text-white rounded-xl p-5 shadow-lg flex items-center justify-between gap-4 border border-white/15">
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold text-white/95">Bidang Terbanyak</p>
-                  <p className="mt-2 text-base font-bold leading-snug line-clamp-2">
-                    {stats.topDepartment ? stats.topDepartment.name : 'Belum ada data'}
-                  </p>
-                  <p className="mt-1.5 text-xs text-white/85 tabular-nums">
-                    {stats.topDepartment
-                      ? `${stats.topDepartment.count} kunjungan`
-                      : '0 kunjungan'}
-                  </p>
-                </div>
-                <Building2 className="w-11 h-11 text-white/85 shrink-0" aria-hidden="true" />
-              </div>
-            </>
-          )}
-        </section>
+                {/* 3. Sudah Check-Out Hari Ini - Hijau Cerah */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (quickPreset !== 'today') {
+                      applyQuickPreset('today', true);
+                    }
+                    setStatusFilter('Selesai');
+                  }}
+                  className="text-left bg-gradient-to-br from-[#28A745] to-[#1E7E34] hover:brightness-105 text-white rounded-xl p-4 sm:p-5 shadow-lg transition-all flex items-center justify-between gap-4 border border-white/15"
+                >
+                  <div className="min-w-0">
+                    <p className="text-xs sm:text-sm font-semibold text-white/95">
+                      Sudah Check-Out
+                    </p>
+                    <p className="mt-1.5 tabular-nums text-3xl font-bold leading-none">
+                      {todayDone}
+                    </p>
+                    <p className="mt-1.5 text-xs text-white/85">Selesai kunjungan hari ini</p>
+                  </div>
+                  <CheckCircle2 className="w-10 h-10 sm:w-11 sm:h-11 text-white/85 shrink-0" aria-hidden="true" />
+                </button>
+              </section>
+            );
+          })()}
 
         {activeTab === 'qr' && isSuperAdmin ? (
           <QrPosterStudio onPrintPoster={handlePrintPoster} />
         ) : activeTab === 'recap' ? (
-          <section className="space-y-6">
-            {/* Rekapitulasi Periode */}
-            <div className="bg-[#F8FAFC] border border-white/25 rounded-2xl overflow-hidden shadow-xl">
-              <div className="px-6 py-5 bg-gradient-to-r from-[#0F294A] to-[#1A4275] text-white flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                <div>
-                  <h2 className="text-lg font-bold">
-                    Rekapitulasi Laporan Kunjungan Tamu
-                  </h2>
-                  <p className="text-xs text-slate-200 mt-0.5">
-                    Ringkasan jumlah tamu berdasarkan periode Hari Ini, Minggu Ini, Bulan Ini, Tahun
-                    Ini, dan Tahun Lalu
-                  </p>
-                </div>
-                {canExport && (
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      disabled={exportingCsv}
-                      onClick={handleExportCsv}
-                      className="inline-flex items-center gap-2 px-4 py-2 min-h-[40px] text-xs font-semibold text-[#0F294A] bg-white hover:bg-slate-100 rounded-xl transition-colors"
-                    >
-                      <FileSpreadsheet className="w-4 h-4 shrink-0" aria-hidden="true" />
-                      <span>Export CSV</span>
-                    </button>
-                    <button
-                      type="button"
-                      disabled={printingPdf}
-                      onClick={handlePrintReport}
-                      className="inline-flex items-center gap-2 px-4 py-2 min-h-[40px] text-xs font-semibold text-white bg-[#EA580C] hover:bg-[#C2410C] disabled:opacity-60 rounded-xl transition-colors"
-                    >
-                      <Printer className="w-4 h-4 shrink-0" aria-hidden="true" />
-                      <span>{printingPdf ? 'Menyiapkan PDF...' : 'Cetak Rekap PDF'}</span>
-                    </button>
-                  </div>
-                )}
-              </div>
+          (() => {
+            const recapList = stats.periodRecap || [];
+            const activeRecapItem =
+              recapList.find((item) => item.key === selectedRecapKey) ||
+              recapList[0] || {
+                key: 'today' as QuickPreset,
+                label: 'Hari Ini',
+                rangeLabel: getTodayWib(),
+                total: stats.totalToday,
+                active: stats.activeNow,
+                done: Math.max(0, stats.totalToday - stats.activeNow),
+              };
+            const availableRecapOptions = isResepsionis
+              ? recapList.filter((item) => item.key === 'today')
+              : recapList;
+            const breakdownItems =
+              breakdownTab === 'department' ? stats.departmentBreakdown : stats.categoryBreakdown;
 
-              <div className="overflow-x-auto bg-white">
-                <table className="w-full text-left border-collapse text-sm">
-                  <thead>
-                    <tr className="bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-700">
-                      <th className="py-3.5 px-5">Periode Laporan</th>
-                      <th className="py-3.5 px-5">Rentang Tanggal (WIB)</th>
-                      <th className="py-3.5 px-5 text-right">Jumlah Tamu</th>
-                      <th className="py-3.5 px-5 text-right">Sedang Berkunjung</th>
-                      <th className="py-3.5 px-5 text-right">Selesai (Check-Out)</th>
-                      {!isResepsionis && <th className="py-3.5 px-5 text-right">Aksi</th>}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {(stats.periodRecap || []).map((row) => (
-                      <tr key={row.key} className="hover:bg-slate-50/80">
-                        <td className="py-3.5 px-5 font-bold text-[#0F294A]">{row.label}</td>
-                        <td className="py-3.5 px-5 text-xs text-slate-600 tabular-nums">
-                          {row.rangeLabel}
-                        </td>
-                        <td className="py-3.5 px-5 text-right font-bold tabular-nums text-[#007BFF]">
-                          {row.total}
-                        </td>
-                        <td className="py-3.5 px-5 text-right font-semibold tabular-nums text-[#EA580C]">
-                          {row.active}
-                        </td>
-                        <td className="py-3.5 px-5 text-right font-semibold tabular-nums text-[#28A745]">
-                          {row.done}
-                        </td>
+            return (
+              <section className="space-y-5">
+                {/* Item Rekapan Pilihan — Simpel & Praktis */}
+                <div className="bg-[#F8FAFC] border border-white/25 rounded-2xl overflow-hidden shadow-xl">
+                  <div className="px-5 py-4 bg-gradient-to-r from-[#0F294A] to-[#1A4275] text-white flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                    <div>
+                      <h2 className="text-base sm:text-lg font-bold">
+                        Rekapitulasi Laporan Kunjungan
+                      </h2>
+                      <p className="text-xs text-slate-200 mt-0.5">
+                        Pilih item periode rekapan untuk melihat ringkasan & mencetak laporan.
+                      </p>
+                    </div>
+                    {canExport && (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          disabled={exportingCsv}
+                          onClick={handleExportCsv}
+                          className="inline-flex items-center gap-1.5 px-3.5 py-2 min-h-[38px] text-xs font-semibold text-[#0F294A] bg-white hover:bg-slate-100 rounded-xl transition-colors"
+                        >
+                          <FileSpreadsheet className="w-4 h-4 shrink-0" aria-hidden="true" />
+                          <span>Export CSV</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={printingPdf}
+                          onClick={handlePrintReport}
+                          className="inline-flex items-center gap-1.5 px-3.5 py-2 min-h-[38px] text-xs font-semibold text-white bg-[#EA580C] hover:bg-[#C2410C] disabled:opacity-60 rounded-xl transition-colors"
+                        >
+                          <Printer className="w-4 h-4 shrink-0" aria-hidden="true" />
+                          <span>{printingPdf ? 'Menyiapkan PDF...' : 'Cetak Rekap PDF'}</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="p-4 sm:p-5 bg-white space-y-4">
+                    {/* Compact Period Dropdown Selector */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+                      <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 flex-1">
+                        <label
+                          htmlFor="recap-period-select"
+                          className="text-xs sm:text-sm font-bold text-[#0F294A] whitespace-nowrap"
+                        >
+                          Pilih Item Rekapan:
+                        </label>
+                        <select
+                          id="recap-period-select"
+                          value={selectedRecapKey}
+                          disabled={isResepsionis}
+                          onChange={(e) => applyQuickPreset(e.target.value as QuickPreset, false)}
+                          className="min-h-[42px] px-3.5 py-2 rounded-xl border border-slate-300 bg-slate-50 text-sm font-semibold text-[#0F294A] focus:outline-none focus:border-[#0F294A] focus:ring-2 focus:ring-[#EA580C]/25 sm:min-w-[230px]"
+                        >
+                          {availableRecapOptions.length > 0 ? (
+                            availableRecapOptions.map((item) => (
+                              <option key={item.key} value={item.key}>
+                                {item.label} ({item.total} tamu)
+                              </option>
+                            ))
+                          ) : (
+                            <option value="today">Hari Ini</option>
+                          )}
+                        </select>
+                      </div>
+
+                      <div className="flex items-center justify-between sm:justify-end gap-3 text-xs text-slate-500">
+                        <span className="font-mono tabular-nums bg-slate-100 px-2.5 py-1.5 rounded-lg text-slate-700">
+                          {activeRecapItem.rangeLabel}
+                        </span>
                         {!isResepsionis && (
-                          <td className="py-3.5 px-5 text-right">
-                            <button
-                              type="button"
-                              onClick={() => applyQuickPreset(row.key, true)}
-                              className="px-3 py-1.5 text-xs font-semibold text-white bg-[#0F294A] hover:bg-[#091B33] rounded-lg transition-colors"
-                            >
-                              Lihat Rincian
-                            </button>
-                          </td>
+                          <button
+                            type="button"
+                            onClick={() => applyQuickPreset(activeRecapItem.key, true)}
+                            className="px-3 py-1.5 min-h-[34px] text-xs font-semibold text-white bg-[#0F294A] hover:bg-[#091B33] rounded-lg transition-colors whitespace-nowrap"
+                          >
+                            Lihat Tamu
+                          </button>
                         )}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+                      </div>
+                    </div>
 
-            {/* Breakdown Per Bidang & Kategori Pengunjung (berdasarkan filter aktif) */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Per Bidang Tujuan */}
-              <div className="bg-[#F8FAFC] border border-white/25 rounded-2xl overflow-hidden shadow-xl">
-                <div className="px-6 py-4 bg-white border-b border-slate-200 flex items-center justify-between">
-                  <div>
-                    <h3 className="text-base font-bold text-[#0F294A]">
-                      Rekap per Bidang Tujuan
-                    </h3>
-                    <p className="text-xs text-slate-500">
-                      Periode filter aktif ({visits.length} kunjungan)
-                    </p>
+                    {/* 3-Column Compact Metric Strip for Selected Recap Period */}
+                    <div className="grid grid-cols-3 gap-2.5 sm:gap-4">
+                      <div className="rounded-xl bg-gradient-to-br from-[#007BFF] to-[#0056CC] text-white p-3 sm:p-4 shadow-sm">
+                        <p className="text-[11px] sm:text-xs font-semibold text-white/90">
+                          Jumlah Tamu
+                        </p>
+                        <p className="mt-1 text-2xl sm:text-3xl font-bold tabular-nums leading-none">
+                          {activeRecapItem.total}
+                        </p>
+                      </div>
+                      <div className="rounded-xl bg-gradient-to-br from-[#EA580C] to-[#C2410C] text-white p-3 sm:p-4 shadow-sm">
+                        <p className="text-[11px] sm:text-xs font-semibold text-white/90">
+                          Berkunjung
+                        </p>
+                        <p className="mt-1 text-2xl sm:text-3xl font-bold tabular-nums leading-none">
+                          {activeRecapItem.active}
+                        </p>
+                      </div>
+                      <div className="rounded-xl bg-gradient-to-br from-[#28A745] to-[#1E7E34] text-white p-3 sm:p-4 shadow-sm">
+                        <p className="text-[11px] sm:text-xs font-semibold text-white/90">
+                          Selesai
+                        </p>
+                        <p className="mt-1 text-2xl sm:text-3xl font-bold tabular-nums leading-none">
+                          {activeRecapItem.done}
+                        </p>
+                      </div>
+                    </div>
                   </div>
                 </div>
-                <div className="p-5 bg-white space-y-3">
-                  {stats.departmentBreakdown.length === 0 ? (
-                    <p className="text-sm text-slate-500 py-4 text-center">
-                      Belum ada data kunjungan pada periode filter aktif.
-                    </p>
-                  ) : (
-                    stats.departmentBreakdown.map((item) => {
-                      const pct =
-                        visits.length > 0 ? Math.round((item.total / visits.length) * 100) : 0;
-                      return (
-                        <div key={item.name} className="space-y-1.5">
-                          <div className="flex items-center justify-between text-xs sm:text-sm">
-                            <span className="font-semibold text-slate-800">{item.name}</span>
-                            <span className="font-bold text-[#0F294A] tabular-nums">
-                              {item.total} ({pct}%)
-                            </span>
-                          </div>
-                          <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden">
-                            <div
-                              className="h-full bg-[#007BFF] rounded-full"
-                              style={{ width: `${pct}%` }}
-                            />
-                          </div>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-              </div>
 
-              {/* Per Kategori Pengunjung */}
-              <div className="bg-[#F8FAFC] border border-white/25 rounded-2xl overflow-hidden shadow-xl">
-                <div className="px-6 py-4 bg-white border-b border-slate-200 flex items-center justify-between">
-                  <div>
-                    <h3 className="text-base font-bold text-[#0F294A]">
-                      Rekap per Kategori Pengunjung
-                    </h3>
-                    <p className="text-xs text-slate-500">
-                      Periode filter aktif ({visits.length} kunjungan)
-                    </p>
+                {/* Single Compact Tabbed Breakdown Card (Bidang / Kategori) */}
+                <div className="bg-[#F8FAFC] border border-white/25 rounded-2xl overflow-hidden shadow-xl">
+                  <div className="px-5 py-3.5 bg-white border-b border-slate-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                    <div>
+                      <h3 className="text-sm sm:text-base font-bold text-[#0F294A]">
+                        Rincian Kunjungan — {activeRecapItem.label}
+                      </h3>
+                      <p className="text-xs text-slate-500">
+                        {visits.length} kunjungan tercatat pada periode pilihan
+                      </p>
+                    </div>
+                    <div className="inline-flex p-1 bg-slate-100 rounded-xl self-start">
+                      <button
+                        type="button"
+                        onClick={() => setBreakdownTab('department')}
+                        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
+                          breakdownTab === 'department'
+                            ? 'bg-[#0F294A] text-white shadow-sm'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        Per Bidang Tujuan
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setBreakdownTab('category')}
+                        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
+                          breakdownTab === 'category'
+                            ? 'bg-[#EA580C] text-white shadow-sm'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        Per Kategori Tamu
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="p-4 sm:p-5 bg-white space-y-3">
+                    {breakdownItems.length === 0 ? (
+                      <p className="text-sm text-slate-500 py-4 text-center">
+                        Belum ada data kunjungan pada periode {activeRecapItem.label.toLowerCase()}.
+                      </p>
+                    ) : (
+                      breakdownItems.map((item) => {
+                        const pct =
+                          visits.length > 0 ? Math.round((item.total / visits.length) * 100) : 0;
+                        return (
+                          <div key={item.name} className="space-y-1.5">
+                            <div className="flex items-center justify-between text-xs sm:text-sm">
+                              <span className="font-semibold text-slate-800">{item.name}</span>
+                              <span className="font-bold text-[#0F294A] tabular-nums">
+                                {item.total} ({pct}%)
+                              </span>
+                            </div>
+                            <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden">
+                              <div
+                                className={`h-full rounded-full ${
+                                  breakdownTab === 'department' ? 'bg-[#007BFF]' : 'bg-[#EA580C]'
+                                }`}
+                                style={{ width: `${pct}%` }}
+                              />
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
                   </div>
                 </div>
-                <div className="p-5 bg-white space-y-3">
-                  {stats.categoryBreakdown.length === 0 ? (
-                    <p className="text-sm text-slate-500 py-4 text-center">
-                      Belum ada data kunjungan pada periode filter aktif.
-                    </p>
-                  ) : (
-                    stats.categoryBreakdown.map((item) => {
-                      const pct =
-                        visits.length > 0 ? Math.round((item.total / visits.length) * 100) : 0;
-                      return (
-                        <div key={item.name} className="space-y-1.5">
-                          <div className="flex items-center justify-between text-xs sm:text-sm">
-                            <span className="font-semibold text-slate-800">{item.name}</span>
-                            <span className="font-bold text-[#0F294A] tabular-nums">
-                              {item.total} ({pct}%)
-                            </span>
-                          </div>
-                          <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden">
-                            <div
-                              className="h-full bg-[#EA580C] rounded-full"
-                              style={{ width: `${pct}%` }}
-                            />
-                          </div>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-              </div>
-            </div>
-          </section>
+              </section>
+            );
+          })()
         ) : (activeTab === 'departments' || activeTab === 'users' || activeTab === 'audit') &&
           isSuperAdmin ? (
           <AdminManagementPanel
@@ -824,9 +746,36 @@ export function AdminDashboard({
           />
         ) : (
           <section className="bg-[#F8FAFC] border border-white/25 rounded-2xl overflow-hidden shadow-xl">
-            {/* Toolbar & Filters */}
-            <div className="p-5 sm:p-6 border-b border-slate-200 space-y-4">
-              <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+            {/* Toolbar & Filters — Focused on Tamu Hari Ini */}
+            <div className="p-4 sm:p-6 border-b border-slate-200 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-3 border-b border-slate-200/80">
+                <div>
+                  <h2 className="text-base sm:text-lg font-bold text-[#0F294A]">
+                    {quickPreset === 'today'
+                      ? `Daftar Tamu Hari Ini (${formatShortDate(getTodayWib())})`
+                      : `Daftar Tamu — ${
+                          stats.periodRecap?.find((p) => p.key === quickPreset)?.label || 'Periode Pilihan'
+                        }`}
+                  </h2>
+                  <p className="text-xs text-slate-500">
+                    {quickPreset === 'today'
+                      ? 'Menampilkan seluruh tamu yang berkunjung pada hari ini.'
+                      : 'Menampilkan daftar kunjungan sesuai item rekapan yang dipilih.'}
+                  </p>
+                </div>
+
+                {quickPreset !== 'today' && (
+                  <button
+                    type="button"
+                    onClick={() => applyQuickPreset('today', true)}
+                    className="self-start sm:self-auto px-3 py-1.5 text-xs font-semibold text-white bg-[#0F294A] hover:bg-[#091B33] rounded-lg transition-colors whitespace-nowrap"
+                  >
+                    Kembali ke Tamu Hari Ini
+                  </button>
+                )}
+              </div>
+
+              <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
                 {/* Search */}
                 <div className="relative flex-1 max-w-md">
                   <Search
@@ -844,7 +793,7 @@ export function AdminDashboard({
                 </div>
 
                 {/* RBAC Action Buttons */}
-                <div className="flex flex-wrap items-center gap-2.5">
+                <div className="flex flex-wrap items-center gap-2">
                   {canManualInput && (
                     <button
                       type="button"
@@ -862,90 +811,28 @@ export function AdminDashboard({
                         type="button"
                         disabled={exportingCsv}
                         onClick={handleExportCsv}
-                        className="inline-flex items-center gap-2 px-4 py-2 min-h-[42px] text-xs sm:text-sm font-semibold text-[#0F294A] bg-white border border-slate-300 hover:bg-slate-100 disabled:opacity-60 rounded-xl transition-colors whitespace-nowrap shrink-0"
+                        className="inline-flex items-center gap-2 px-3.5 py-2 min-h-[42px] text-xs sm:text-sm font-semibold text-[#0F294A] bg-white border border-slate-300 hover:bg-slate-100 disabled:opacity-60 rounded-xl transition-colors whitespace-nowrap shrink-0"
                       >
                         <FileSpreadsheet className="w-4 h-4 shrink-0" aria-hidden="true" />
-                        <span>{exportingCsv ? 'Mengunduh...' : 'Export Excel (CSV)'}</span>
+                        <span>{exportingCsv ? 'Mengunduh...' : 'Export CSV'}</span>
                       </button>
 
                       <button
                         type="button"
                         disabled={printingPdf}
                         onClick={handlePrintReport}
-                        className="inline-flex items-center gap-2 px-4 py-2 min-h-[42px] text-xs sm:text-sm font-semibold text-white bg-[#EA580C] hover:bg-[#C2410C] disabled:opacity-60 rounded-xl transition-colors whitespace-nowrap shrink-0"
+                        className="inline-flex items-center gap-2 px-3.5 py-2 min-h-[42px] text-xs sm:text-sm font-semibold text-white bg-[#EA580C] hover:bg-[#C2410C] disabled:opacity-60 rounded-xl transition-colors whitespace-nowrap shrink-0"
                       >
                         <Printer className="w-4 h-4 shrink-0" aria-hidden="true" />
-                        <span>{printingPdf ? 'Menyiapkan PDF...' : 'Cetak Laporan PDF'}</span>
+                        <span>{printingPdf ? 'Menyiapkan PDF...' : 'Cetak PDF'}</span>
                       </button>
                     </>
                   )}
                 </div>
               </div>
 
-              {/* Date Presets & Dropdown Filters */}
-              <div className="flex flex-wrap items-center gap-3 pt-1">
-                {!isResepsionis && (
-                  <>
-                    <div className="inline-flex flex-wrap items-center p-1 bg-slate-200/70 rounded-lg gap-0.5">
-                      {(
-                        [
-                          { id: 'all', label: 'Semua' },
-                          { id: 'today', label: 'Hari Ini' },
-                          { id: 'week', label: 'Minggu Ini' },
-                          { id: 'month', label: 'Bulan Ini' },
-                          { id: 'year', label: 'Tahun Ini' },
-                          { id: 'last_year', label: 'Tahun Lalu' },
-                        ] as const
-                      ).map((preset) => (
-                        <button
-                          key={preset.id}
-                          type="button"
-                          onClick={() => applyQuickPreset(preset.id)}
-                          className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors whitespace-nowrap ${
-                            quickPreset === preset.id
-                              ? 'bg-[#0F294A] text-white shadow-sm'
-                              : 'text-slate-700 hover:text-slate-900'
-                          }`}
-                        >
-                          {preset.label}
-                        </button>
-                      ))}
-                    </div>
-
-                    <div className="flex items-center gap-2 text-xs">
-                      <label htmlFor="filter-date-from" className="text-slate-500 font-medium">
-                        Dari:
-                      </label>
-                      <input
-                        id="filter-date-from"
-                        type="date"
-                        value={dateFrom}
-                        onChange={(e) => {
-                          setQuickPreset('all');
-                          setDateFrom(e.target.value);
-                        }}
-                        className="min-h-[38px] px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs font-mono bg-white"
-                      />
-                    </div>
-
-                    <div className="flex items-center gap-2 text-xs">
-                      <label htmlFor="filter-date-to" className="text-slate-500 font-medium">
-                        Sampai:
-                      </label>
-                      <input
-                        id="filter-date-to"
-                        type="date"
-                        value={dateTo}
-                        onChange={(e) => {
-                          setQuickPreset('all');
-                          setDateTo(e.target.value);
-                        }}
-                        className="min-h-[38px] px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs font-mono bg-white"
-                      />
-                    </div>
-                  </>
-                )}
-
+              {/* Compact Department & Status Filters */}
+              <div className="flex flex-wrap items-center gap-2.5">
                 {(!isPimpinan || authUser.department === 'Semua Bidang') && (
                   <select
                     aria-label="Filter Bidang Tujuan"

@@ -4,6 +4,8 @@ import { TopBar, type AppView } from './components/TopBar';
 import { PublicGuestPage } from './components/PublicGuestPage';
 import { AdminLoginView } from './components/AdminLoginView';
 import { AdminDashboard } from './components/AdminDashboard';
+import { QrPosterStudio } from './components/QrPosterStudio';
+import { downloadDeskPosterPdf } from './lib/pdfGenerator';
 import { ApiError, fetchVisitReceipt, logoutInternalUser } from './lib/api';
 
 const RECEIPT_STORAGE_KEY = 'sitamu_bpbd_active_receipt';
@@ -24,6 +26,7 @@ export default function App() {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       if (params.get('view') === 'admin') return 'admin';
+      if (params.get('view') === 'qr') return 'qr';
     }
     return 'public';
   });
@@ -134,6 +137,14 @@ export default function App() {
     sessionStorage.removeItem(RECEIPT_STORAGE_KEY);
   };
 
+  const handlePrintStandalonePoster = async (
+    qrDataUrl: string,
+    targetUrl: string,
+    deskLabel: string,
+  ) => {
+    await downloadDeskPosterPdf({ qrDataUrl, targetUrl, deskLabel });
+  };
+
   return (
     <div className="bpbd-canvas min-h-screen flex flex-col text-slate-900">
       <TopBar
@@ -151,6 +162,18 @@ export default function App() {
             onReceiptUpdated={handleReceiptUpdated}
             onClearReceipt={handleClearReceipt}
           />
+        ) : activeView === 'qr' ? (
+          <main className="no-print max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
+            <div className="space-y-1">
+              <p className="text-xs font-semibold text-[#FDBA74]">
+                BPBD Kabupaten Sidoarjo · Layanan Pemindaian Tamu
+              </p>
+              <h1 className="font-display text-2xl sm:text-3xl font-bold text-white tracking-tight">
+                Poster QR Code Meja Resepsionis
+              </h1>
+            </div>
+            <QrPosterStudio onPrintPoster={handlePrintStandalonePoster} />
+          </main>
         ) : authSession ? (
           <AdminDashboard
             token={authSession.token}

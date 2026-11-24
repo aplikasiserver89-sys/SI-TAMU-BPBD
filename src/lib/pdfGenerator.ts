@@ -9,9 +9,18 @@ async function loadImageAsPngDataUrl(src: string, circularCrop = false): Promise
   if (src.startsWith('data:image/png')) return src;
 
   return new Promise((resolve) => {
+    let settled = false;
+    const finish = (val: string | null) => {
+      if (!settled) {
+        settled = true;
+        resolve(val);
+      }
+    };
+    const timer = window.setTimeout(() => finish(null), 3000);
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.onload = () => {
+      window.clearTimeout(timer);
       try {
         const size = 256;
         const canvas = document.createElement('canvas');
@@ -19,7 +28,7 @@ async function loadImageAsPngDataUrl(src: string, circularCrop = false): Promise
         canvas.height = size;
         const ctx = canvas.getContext('2d');
         if (!ctx) {
-          resolve(null);
+          finish(null);
           return;
         }
         if (circularCrop) {
@@ -39,12 +48,15 @@ async function loadImageAsPngDataUrl(src: string, circularCrop = false): Promise
           const h = img.height * scale;
           ctx.drawImage(img, (size - w) / 2, (size - h) / 2, w, h);
         }
-        resolve(canvas.toDataURL('image/png'));
+        finish(canvas.toDataURL('image/png'));
       } catch {
-        resolve(null);
+        finish(null);
       }
     };
-    img.onerror = () => resolve(null);
+    img.onerror = () => {
+      window.clearTimeout(timer);
+      finish(null);
+    };
     img.src = src;
   });
 }

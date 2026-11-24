@@ -21,6 +21,7 @@ export function QrPosterStudio({ onPrintPoster }: QrPosterStudioProps) {
   const [downloadingPoster, setDownloadingPoster] = useState(false);
   const [printingPosterPdf, setPrintingPosterPdf] = useState(false);
   const [posterNotice, setPosterNotice] = useState('');
+  const [posterError, setPosterError] = useState('');
 
   useEffect(() => {
     let active = true;
@@ -45,23 +46,45 @@ export function QrPosterStudio({ onPrintPoster }: QrPosterStudioProps) {
     };
   }, [targetUrl, defaultPublicUrl]);
 
-  const handleDownloadQrOnly = () => {
-    if (!qrDataUrl) return;
+  const triggerBlobDownload = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.href = qrDataUrl;
-    link.download = 'qr-si-tamu-bpbd-sidoarjo.png';
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
     link.click();
+    document.body.removeChild(link);
+    window.setTimeout(() => URL.revokeObjectURL(url), 1500);
+  };
+
+  const handleDownloadQrOnly = async () => {
+    if (!qrDataUrl) return;
+    setPosterError('');
+    setPosterNotice('');
+    try {
+      const response = await fetch(qrDataUrl);
+      const blob = await response.blob();
+      triggerBlobDownload(blob, 'qr-si-tamu-bpbd-sidoarjo.png');
+      setPosterNotice('Gambar QR Code (PNG) berhasil diunduh.');
+    } catch {
+      setPosterError('Gagal mengunduh gambar QR Code.');
+    }
   };
 
   const handleDownloadFullPosterPng = async () => {
     if (!qrDataUrl) return;
+    setPosterError('');
+    setPosterNotice('');
     setDownloadingPoster(true);
     try {
       const canvas = document.createElement('canvas');
       canvas.width = 1240;
       canvas.height = 1754;
       const ctx = canvas.getContext('2d');
-      if (!ctx) return;
+      if (!ctx) {
+        setPosterError('Browser tidak mendukung pembuatan kanvas gambar.');
+        return;
+      }
 
       // White background
       ctx.fillStyle = '#FFFFFF';
@@ -75,37 +98,51 @@ export function QrPosterStudio({ onPrintPoster }: QrPosterStudioProps) {
       ctx.fillStyle = '#EA580C';
       ctx.fillRect(0, 310, canvas.width, 16);
 
-      // Left Logo: Kabupaten Sidoarjo (transparent PNG)
-      await new Promise<void>((resolve) => {
-        const sidoarjoImg = new Image();
-        sidoarjoImg.crossOrigin = 'anonymous';
-        sidoarjoImg.onload = () => {
-          ctx.drawImage(sidoarjoImg, 68, 68, 174, 174);
-          resolve();
-        };
-        sidoarjoImg.onerror = () => resolve();
-        sidoarjoImg.src = SIDOARJO_LOGO_SRC;
+      const loadImg = (src: string, draw: (img: HTMLImageElement) => void) =>
+        new Promise<void>((resolve) => {
+          let settled = false;
+          const finish = () => {
+            if (!settled) {
+              settled = true;
+              resolve();
+            }
+          };
+          const timer = window.setTimeout(finish, 2500);
+          const img = new Image();
+          img.crossOrigin = 'anonymous';
+          img.onload = () => {
+            window.clearTimeout(timer);
+            try {
+              draw(img);
+            } catch {
+              // ignore draw error
+            }
+            finish();
+          };
+          img.onerror = () => {
+            window.clearTimeout(timer);
+            finish();
+          };
+          img.src = src;
+        });
+
+      // Left Logo: Kabupaten Sidoarjo
+      await loadImg(SIDOARJO_LOGO_SRC, (sidoarjoImg) => {
+        ctx.drawImage(sidoarjoImg, 68, 68, 174, 174);
       });
 
       // Right Logo: BPBD Kabupaten Sidoarjo
-      await new Promise<void>((resolve) => {
-        const bpbdImg = new Image();
-        bpbdImg.crossOrigin = 'anonymous';
-        bpbdImg.onload = () => {
-          ctx.fillStyle = '#FFFFFF';
-          ctx.beginPath();
-          ctx.arc(1086, 155, 90, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.save();
-          ctx.beginPath();
-          ctx.arc(1086, 155, 82, 0, Math.PI * 2);
-          ctx.clip();
-          ctx.drawImage(bpbdImg, 1004, 73, 164, 164);
-          ctx.restore();
-          resolve();
-        };
-        bpbdImg.onerror = () => resolve();
-        bpbdImg.src = BPBD_EMBLEM_SRC;
+      await loadImg(BPBD_EMBLEM_SRC, (bpbdImg) => {
+        ctx.fillStyle = '#FFFFFF';
+        ctx.beginPath();
+        ctx.arc(1086, 155, 90, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(1086, 155, 82, 0, Math.PI * 2);
+        ctx.clip();
+        ctx.drawImage(bpbdImg, 1004, 73, 164, 164);
+        ctx.restore();
       });
 
       // Centered Header text
@@ -136,19 +173,18 @@ export function QrPosterStudio({ onPrintPoster }: QrPosterStudioProps) {
       ctx.strokeStyle = '#0F294A';
       ctx.lineWidth = 8;
       ctx.fillStyle = '#F8FAFC';
-      ctx.beginPath();
-      ctx.roundRect(270, 610, 700, 700, 32);
-      ctx.fill();
-      ctx.stroke();
+      if (typeof ctx.roundRect === 'function') {
+        ctx.beginPath();
+        ctx.roundRect(270, 610, 700, 700, 32);
+        ctx.fill();
+        ctx.stroke();
+      } else {
+        ctx.fillRect(270, 610, 700, 700);
+        ctx.strokeRect(270, 610, 700, 700);
+      }
 
-      await new Promise<void>((resolve) => {
-        const qrImg = new Image();
-        qrImg.onload = () => {
-          ctx.drawImage(qrImg, 320, 660, 600, 600);
-          resolve();
-        };
-        qrImg.onerror = () => resolve();
-        qrImg.src = qrDataUrl;
+      await loadImg(qrDataUrl, (qrImg) => {
+        ctx.drawImage(qrImg, 320, 660, 600, 600);
       });
 
       // Step Instructions
@@ -172,12 +208,19 @@ export function QrPosterStudio({ onPrintPoster }: QrPosterStudioProps) {
       ctx.font = '20px Arial, Helvetica, sans-serif';
       ctx.fillText(targetUrl.trim() || defaultPublicUrl, 620, 1720);
 
-      const posterUrl = canvas.toDataURL('image/png');
-      const link = document.createElement('a');
-      link.href = posterUrl;
-      link.download = 'poster-resepsionis-si-tamu-bpbd-sidoarjo.png';
-      link.click();
+      const blob = await new Promise<Blob | null>((resolve) =>
+        canvas.toBlob((result) => resolve(result), 'image/png'),
+      );
+      if (blob) {
+        triggerBlobDownload(blob, 'poster-resepsionis-si-tamu-bpbd-sidoarjo.png');
+      } else {
+        const posterUrl = canvas.toDataURL('image/png');
+        const res = await fetch(posterUrl);
+        triggerBlobDownload(await res.blob(), 'poster-resepsionis-si-tamu-bpbd-sidoarjo.png');
+      }
       setPosterNotice('Poster PNG siap cetak berhasil diunduh.');
+    } catch {
+      setPosterError('Gagal membuat file Poster PNG. Silakan coba kembali.');
     } finally {
       setDownloadingPoster(false);
     }
@@ -185,11 +228,14 @@ export function QrPosterStudio({ onPrintPoster }: QrPosterStudioProps) {
 
   const handlePrintPosterPdfClick = async () => {
     if (!qrDataUrl) return;
+    setPosterError('');
     setPosterNotice('');
     setPrintingPosterPdf(true);
     try {
       await onPrintPoster(qrDataUrl, targetUrl.trim() || defaultPublicUrl, deskLabel);
       setPosterNotice('Poster Meja Resepsionis (PDF) berhasil dibuat dan diunduh.');
+    } catch {
+      setPosterError('Gagal membuat file Poster PDF. Silakan coba kembali.');
     } finally {
       setPrintingPosterPdf(false);
     }
@@ -271,6 +317,14 @@ export function QrPosterStudio({ onPrintPoster }: QrPosterStudioProps) {
         </div>
 
         <div className="pt-2 space-y-3">
+          {posterError && (
+            <div
+              role="alert"
+              className="p-3 rounded-xl bg-red-50 border border-red-200 text-xs font-medium text-red-700"
+            >
+              {posterError}
+            </div>
+          )}
           {posterNotice && (
             <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs font-medium text-emerald-800">
               {posterNotice}

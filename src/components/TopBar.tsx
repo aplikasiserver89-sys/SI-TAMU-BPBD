@@ -2,7 +2,7 @@ import { LogIn, LogOut } from 'lucide-react';
 import type { AuthUser } from '../types';
 import { BpbdEmblem, SidoarjoLogo } from './BpbdEmblem';
 
-export type AppView = 'public' | 'admin';
+export type AppView = 'public' | 'admin' | 'qr';
 
 interface TopBarProps {
   activeView: AppView;
@@ -12,7 +12,7 @@ interface TopBarProps {
 }
 
 export function TopBar({ activeView, authUser, onNavigate, onLogout }: TopBarProps) {
-  const canAccessQr = !authUser || authUser.role === 'super_admin';
+  const canAccessQr = !authUser || authUser.role === 'super_admin' || authUser.role === 'resepsionis';
 
   return (
     <header className="no-print sticky top-0 z-30 bg-[#08172C]/90 backdrop-blur-md border-b border-white/15 text-white">
@@ -60,8 +60,12 @@ export function TopBar({ activeView, authUser, onNavigate, onLogout }: TopBarPro
           {canAccessQr && (
             <button
               type="button"
-              onClick={() => onNavigate('admin', 'qr')}
-              className="py-1.5 border-b-2 border-transparent hover:text-white transition-colors whitespace-nowrap shrink-0"
+              onClick={() => onNavigate('qr', 'qr')}
+              className={`py-1.5 border-b-2 transition-colors whitespace-nowrap shrink-0 ${
+                activeView === 'qr'
+                  ? 'border-[#EA580C] text-white font-semibold'
+                  : 'border-transparent hover:text-white'
+              }`}
             >
               Poster QR Meja
             </button>
@@ -115,8 +119,10 @@ export function TopBar({ activeView, authUser, onNavigate, onLogout }: TopBarPro
         {canAccessQr && (
           <button
             type="button"
-            onClick={() => onNavigate('admin', 'qr')}
-            className="px-3 py-1.5 rounded-md text-slate-300 whitespace-nowrap shrink-0"
+            onClick={() => onNavigate('qr', 'qr')}
+            className={`px-3 py-1.5 rounded-md whitespace-nowrap shrink-0 ${
+              activeView === 'qr' ? 'bg-[#EA580C] text-white font-semibold' : 'text-slate-300'
+            }`}
           >
             Poster QR
           </button>
