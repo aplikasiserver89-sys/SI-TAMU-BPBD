@@ -84,6 +84,22 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs (created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS password_reset_requests (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    username TEXT NOT NULL,
+    full_name TEXT NOT NULL,
+    role TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    token_hash TEXT,
+    token_expires_at INTEGER,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at INTEGER NOT NULL,
+    resolved_at INTEGER
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_pwd_reset_status ON password_reset_requests (status, created_at DESC);
 `);
 
 // Seed default reference master departments once if empty
@@ -155,6 +171,20 @@ export interface AuditLogRow {
   target: string;
   details: string;
   created_at: number;
+}
+
+export interface PasswordResetRequestRow {
+  id: string;
+  user_id: string;
+  username: string;
+  full_name: string;
+  role: string;
+  note: string;
+  token_hash: string | null;
+  token_expires_at: number | null;
+  status: 'pending' | 'token_issued' | 'completed' | 'rejected';
+  created_at: number;
+  resolved_at: number | null;
 }
 
 export function getWibDateString(date: Date = new Date()): string {

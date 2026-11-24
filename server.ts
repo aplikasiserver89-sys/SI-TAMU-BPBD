@@ -12,6 +12,7 @@ import {
   recordAuditLog,
   type AuditLogRow,
   type DepartmentRow,
+  type PasswordResetRequestRow,
   type UserRow,
   type VisitRow,
 } from './server/db.ts';
@@ -487,6 +488,181 @@ async function startServer() {
       revokeUserToken(token);
     }
     res.json({ ok: true });
+  });
+
+  // Public (Rate-Limited): Forgot Password Request to Super Admin
+  app.post('/api/admin/forgot-password', (req: Request, res: Response) => {
+    const ip = req.ip || 'unknown';
+    if (!checkRateLimit(ip)) {
+      res.status(429).json({
+        error: 'Terlalu banyak percobaan. Silakan tunggu beberapa menit sebelum mencoba lagi.',
+      });
+      return;
+    }
+
+    const body = req.body as Record<string, unknown> | null;
+    const username = sanitizeString(body?.username, 60);
+    const note = sanitizeString(body?.note, 200);
+
+    if (!/^[a-zA-Z0-9._-]{3,60}$/.test(username)) {
+      res.status(400).json({ error: 'NIP / Username wajib diisi (minimal 3 karakter).' });
+      return;
+    }
+
+    const userRow = db
+      .prepare('SELECT * FROM users WHERE LOWER(username) = LOWER(?) AND is_active = 1')
+      .get(username) as unknown as UserRow | undefined;
+
+    if (userRow) {
+      const now = Date.now();
+      const recentReq = db
+        .prepare(
+          "SELECT id FROM password_reset_requests WHERE user_id = ? AND status = 'pending' AND created_at > ?",
+        )
+        .get(userRow.id, now - 2 * 60 * 1000) as { id: string } | undefined;
+
+      if (!recentReq) {
+        db.prepare(
+          `INSERT INTO password_reset_requests (
+            id, user_id, username, full_name, role, note, status, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)`,
+        ).run(
+          crypto.randomUUID(),
+          userRow.id,
+          userRow.username,
+          userRow.full_name,
+          userRow.role,
+          note,
+          now,
+        );
+
+        recordAuditLog(
+          userRow.username,
+          userRow.role,
+          'REQUEST_PASSWORD_RESET',
+          userRow.username,
+          note ? `Pengajuan lupa password: ${note}` : 'Mengajukan reset kata sandi',
+        );
+      }
+    }
+
+    // Non-enumerating response: same reply whether user exists or not
+    res.json({
+      ok: true,
+      message:
+        'Permintaan reset kata sandi telah dicatat. Jika NIP / Username terdaftar dan aktif, silakan hubungi Super Admin (Pengadministrasi Umum) untuk mendapatkan kode pemulihan 1x pakai atau reset sandi.',
+    });
+  });
+
+  // Public (Rate-Limited): Reset Password via One-Time Recovery Code or Server ADMIN_RECOVERY_KEY
+  app.post('/api/admin/reset-password', (req: Request, res: Response) => {
+    const ip = req.ip || 'unknown';
+    if (!checkRateLimit(ip)) {
+      res.status(429).json({
+        error: 'Terlalu banyak percobaan pemulihan. Silakan tunggu beberapa menit.',
+      });
+      return;
+    }
+
+    const body = req.body as Record<string, unknown> | null;
+    const username = sanitizeString(body?.username, 60);
+    const recoveryCode = sanitizeString(body?.recoveryCode, 128);
+    const newPassword = typeof body?.newPassword === 'string' ? body.newPassword : '';
+
+    if (!username || !recoveryCode) {
+      res.status(400).json({ error: 'NIP / Username dan Kode Pemulihan wajib diisi.' });
+      return;
+    }
+    if (newPassword.length < 8 || newPassword.length > 128) {
+      res.status(400).json({ error: 'Kata sandi baru wajib 8 sampai 128 karakter.' });
+      return;
+    }
+
+    const userRow = db
+      .prepare('SELECT * FROM users WHERE LOWER(username) = LOWER(?) AND is_active = 1')
+      .get(username) as unknown as UserRow | undefined;
+
+    if (!userRow) {
+      res.status(401).json({
+        error: 'NIP / Username atau kode pemulihan tidak valid atau sudah kedaluwarsa.',
+      });
+      return;
+    }
+
+    const now = Date.now();
+    let authorizedMethod: 'token' | 'recovery_key' | null = null;
+    let matchedRequestId: string | null = null;
+
+    // 1) Check issued one-time recovery token for this user (case-insensitive, ignore spaces/hyphens)
+    const normalizedToken = recoveryCode.toUpperCase().replace(/[\s-]+/g, '');
+    const providedTokenHash = hashCheckoutToken(normalizedToken);
+    const issuedRequests = db
+      .prepare(
+        "SELECT * FROM password_reset_requests WHERE user_id = ? AND status = 'token_issued' AND token_hash IS NOT NULL AND token_expires_at > ? ORDER BY created_at DESC",
+      )
+      .all(userRow.id, now) as unknown as PasswordResetRequestRow[];
+
+    for (const reqRow of issuedRequests) {
+      if (reqRow.token_hash && verifyCheckoutToken(normalizedToken, reqRow.token_hash)) {
+        authorizedMethod = 'token';
+        matchedRequestId = reqRow.id;
+        break;
+      }
+    }
+
+    // 2) Fallback for Super Admin using server environment ADMIN_RECOVERY_KEY (min 12 chars)
+    if (!authorizedMethod && userRow.role === 'super_admin') {
+      const envRecoveryKey = process.env.ADMIN_RECOVERY_KEY?.trim();
+      if (envRecoveryKey && envRecoveryKey.length >= 12) {
+        const a = Buffer.from(hashCheckoutToken(recoveryCode.trim()), 'hex');
+        const b = Buffer.from(hashCheckoutToken(envRecoveryKey), 'hex');
+        if (a.length === b.length && crypto.timingSafeEqual(a, b)) {
+          authorizedMethod = 'recovery_key';
+        }
+      }
+    }
+
+    void providedTokenHash;
+
+    if (!authorizedMethod) {
+      res.status(401).json({
+        error: 'NIP / Username atau kode pemulihan tidak valid atau sudah kedaluwarsa.',
+      });
+      return;
+    }
+
+    const nextHash = hashPasswordScrypt(newPassword);
+    db.prepare('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?').run(
+      nextHash,
+      now,
+      userRow.id,
+    );
+
+    if (matchedRequestId) {
+      db.prepare(
+        "UPDATE password_reset_requests SET status = 'completed', token_hash = NULL, resolved_at = ? WHERE id = ?",
+      ).run(now, matchedRequestId);
+    }
+
+    // Close any remaining open reset requests for this user
+    db.prepare(
+      "UPDATE password_reset_requests SET status = 'completed', token_hash = NULL, resolved_at = ? WHERE user_id = ? AND status IN ('pending', 'token_issued')",
+    ).run(now, userRow.id);
+
+    recordAuditLog(
+      userRow.username,
+      userRow.role,
+      'PASSWORD_RESET_COMPLETED',
+      userRow.username,
+      authorizedMethod === 'recovery_key'
+        ? 'Reset sandi menggunakan ADMIN_RECOVERY_KEY'
+        : 'Reset sandi menggunakan kode pemulihan 1x pakai',
+    );
+
+    res.json({
+      ok: true,
+      message: 'Kata sandi berhasil diperbarui. Silakan masuk menggunakan kata sandi baru Anda.',
+    });
   });
 
   // RBAC-Protected Dashboard Data (All 3 roles, scoped per role)
@@ -1184,9 +1360,16 @@ async function startServer() {
         nextPasswordHash = hashPasswordScrypt(newPassword);
       }
 
+      const now = Date.now();
       db.prepare(
         'UPDATE users SET role = ?, department = ?, is_active = ?, password_hash = ?, updated_at = ? WHERE id = ?',
-      ).run(nextRole, nextDepartment, nextActive, nextPasswordHash, Date.now(), id);
+      ).run(nextRole, nextDepartment, nextActive, nextPasswordHash, now, id);
+
+      if (newPassword) {
+        db.prepare(
+          "UPDATE password_reset_requests SET status = 'completed', token_hash = NULL, resolved_at = ? WHERE user_id = ? AND status IN ('pending', 'token_issued')",
+        ).run(now, id);
+      }
 
       recordAuditLog(
         actor.username,
@@ -1207,6 +1390,113 @@ async function startServer() {
           createdAt: targetUser.created_at,
         },
       });
+    },
+  );
+
+  // RBAC: Password Reset Requests Management (super_admin ONLY)
+  app.get(
+    '/api/admin/password-reset-requests',
+    requireAuth,
+    requireRole('super_admin'),
+    (_req: Request, res: Response) => {
+      const rows = db
+        .prepare(
+          `SELECT id, user_id, username, full_name, role, note, status, token_expires_at, created_at, resolved_at
+           FROM password_reset_requests
+           ORDER BY CASE WHEN status IN ('pending', 'token_issued') THEN 0 ELSE 1 END, created_at DESC
+           LIMIT 50`,
+        )
+        .all() as unknown as PasswordResetRequestRow[];
+
+      res.json({
+        requests: rows.map((r) => ({
+          id: r.id,
+          userId: r.user_id,
+          username: r.username,
+          fullName: r.full_name,
+          role: r.role,
+          note: r.note,
+          status: r.status,
+          tokenExpiresAt: r.token_expires_at,
+          createdAt: r.created_at,
+          resolvedAt: r.resolved_at,
+        })),
+      });
+    },
+  );
+
+  app.post(
+    '/api/admin/password-reset-requests/:id/issue-token',
+    requireAuth,
+    requireRole('super_admin'),
+    (req: Request, res: Response) => {
+      const actor = req.authUser!;
+      const id = String(req.params.id || '');
+      const reqRow = db
+        .prepare('SELECT * FROM password_reset_requests WHERE id = ?')
+        .get(id) as unknown as PasswordResetRequestRow | undefined;
+
+      if (!reqRow) {
+        res.status(404).json({ error: 'Permintaan reset password tidak ditemukan.' });
+        return;
+      }
+
+      const rawCode = crypto.randomBytes(5).toString('hex').toUpperCase();
+      const recoveryCode = `${rawCode.slice(0, 5)}-${rawCode.slice(5)}`;
+      const normalizedCode = recoveryCode.replace(/-/g, '');
+      const tokenHash = hashCheckoutToken(normalizedCode);
+      const expiresAt = Date.now() + 15 * 60 * 1000;
+
+      // Also accept code with or without hyphen by hashing normalizedCode; we'll verify consistently!
+      db.prepare(
+        "UPDATE password_reset_requests SET status = 'token_issued', token_hash = ?, token_expires_at = ? WHERE id = ?",
+      ).run(tokenHash, expiresAt, id);
+
+      recordAuditLog(
+        actor.username,
+        actor.role,
+        'ISSUE_RECOVERY_TOKEN',
+        reqRow.username,
+        'Menerbitkan kode pemulihan 1x pakai (berlaku 15 menit)',
+      );
+
+      res.json({
+        recoveryCode,
+        expiresAt,
+        username: reqRow.username,
+      });
+    },
+  );
+
+  app.post(
+    '/api/admin/password-reset-requests/:id/dismiss',
+    requireAuth,
+    requireRole('super_admin'),
+    (req: Request, res: Response) => {
+      const actor = req.authUser!;
+      const id = String(req.params.id || '');
+      const reqRow = db
+        .prepare('SELECT * FROM password_reset_requests WHERE id = ?')
+        .get(id) as unknown as PasswordResetRequestRow | undefined;
+
+      if (!reqRow) {
+        res.status(404).json({ error: 'Permintaan reset password tidak ditemukan.' });
+        return;
+      }
+
+      db.prepare(
+        "UPDATE password_reset_requests SET status = 'rejected', token_hash = NULL, resolved_at = ? WHERE id = ?",
+      ).run(Date.now(), id);
+
+      recordAuditLog(
+        actor.username,
+        actor.role,
+        'DISMISS_PASSWORD_RESET',
+        reqRow.username,
+        'Menutup/menolak permintaan reset kata sandi',
+      );
+
+      res.json({ ok: true });
     },
   );
 

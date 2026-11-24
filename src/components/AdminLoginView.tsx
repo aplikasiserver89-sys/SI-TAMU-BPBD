@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Eye, EyeOff, KeyRound, Lock, ShieldCheck, UserCheck } from 'lucide-react';
+import { ArrowLeft, Eye, EyeOff, KeyRound, LifeBuoy, Lock, Send, ShieldCheck, UserCheck } from 'lucide-react';
 import type { AdminAuthStatus, AuthUser } from '../types';
 import { BpbdEmblem, SidoarjoLogo } from './BpbdEmblem';
 
@@ -11,6 +11,8 @@ interface AdminLoginViewProps {
 export function AdminLoginView({ onAuthenticated, onBackToPublic }: AdminLoginViewProps) {
   const [authStatus, setAuthStatus] = useState<AdminAuthStatus | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(true);
+  const [viewMode, setViewMode] = useState<'login' | 'forgot'>('login');
+  const [forgotTab, setForgotTab] = useState<'request' | 'reset'>('request');
 
   const [username, setUsername] = useState('');
   const [fullName, setFullName] = useState('');
@@ -19,7 +21,15 @@ export function AdminLoginView({ onAuthenticated, onBackToPublic }: AdminLoginVi
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
+  // Forgot / Reset Password States
+  const [resetNote, setResetNote] = useState('');
+  const [recoveryCode, setRecoveryCode] = useState('');
+  const [newResetPassword, setNewResetPassword] = useState('');
+  const [confirmResetPassword, setConfirmResetPassword] = useState('');
+  const [showNewResetPassword, setShowNewResetPassword] = useState(false);
+
   const [error, setError] = useState('');
+  const [successNotice, setSuccessNotice] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
@@ -95,6 +105,7 @@ export function AdminLoginView({ onAuthenticated, onBackToPublic }: AdminLoginVi
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setSuccessNotice('');
     if (!username.trim() || !password) {
       setError('NIP / Username dan kata sandi wajib diisi.');
       return;
@@ -120,6 +131,92 @@ export function AdminLoginView({ onAuthenticated, onBackToPublic }: AdminLoginVi
     }
   };
 
+  const handleRequestPasswordReset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setSuccessNotice('');
+    if (!/^[a-zA-Z0-9._-]{3,60}$/.test(username.trim())) {
+      setError('NIP / Username wajib diisi (minimal 3 karakter).');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const res = await fetch('/api/admin/forgot-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: username.trim(),
+          note: resetNote.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || 'Gagal mengirim permintaan reset kata sandi.');
+        return;
+      }
+      setResetNote('');
+      setSuccessNotice(data.message);
+    } catch {
+      setError('Gagal terhubung ke server.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleCompletePasswordReset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setSuccessNotice('');
+
+    if (!username.trim()) {
+      setError('NIP / Username wajib diisi.');
+      return;
+    }
+    if (!recoveryCode.trim()) {
+      setError('Kode pemulihan wajib diisi.');
+      return;
+    }
+    if (newResetPassword.length < 8) {
+      setError('Kata sandi baru minimal 8 karakter.');
+      return;
+    }
+    if (newResetPassword !== confirmResetPassword) {
+      setError('Konfirmasi kata sandi baru tidak cocok.');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const res = await fetch('/api/admin/reset-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: username.trim(),
+          recoveryCode: recoveryCode.trim(),
+          newPassword: newResetPassword,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || 'Gagal memperbarui kata sandi.');
+        return;
+      }
+      setRecoveryCode('');
+      setNewResetPassword('');
+      setConfirmResetPassword('');
+      setPassword('');
+      setViewMode('login');
+      setSuccessNotice(
+        data.message || 'Kata sandi berhasil diperbarui. Silakan masuk dengan sandi baru.',
+      );
+    } catch {
+      setError('Gagal terhubung ke server.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const isBootstrapMode = authStatus && !authStatus.configured;
 
   return (
@@ -135,7 +232,9 @@ export function AdminLoginView({ onAuthenticated, onBackToPublic }: AdminLoginVi
             <h1 className="font-display text-base sm:text-lg font-extrabold text-white">
               {isBootstrapMode
                 ? 'Aktivasi Super Admin Pertama Kali'
-                : 'Portal Masuk Internal (RBAC)'}
+                : viewMode === 'forgot'
+                  ? 'Pemulihan Kata Sandi Internal'
+                  : 'Portal Masuk Internal (RBAC)'}
             </h1>
             <p className="text-xs text-slate-300 mt-0.5">SI-TAMU BPBD · Autentikasi Pegawai</p>
           </div>
@@ -290,6 +389,259 @@ export function AdminLoginView({ onAuthenticated, onBackToPublic }: AdminLoginVi
                 </button>
               </div>
             </form>
+          ) : viewMode === 'forgot' ? (
+            <div className="space-y-5">
+              {/* Sub-Tab Selector */}
+              <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-200/80 rounded-xl">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setForgotTab('request');
+                    setError('');
+                    setSuccessNotice('');
+                  }}
+                  className={`py-2 px-3 text-xs font-bold rounded-lg transition-colors ${
+                    forgotTab === 'request'
+                      ? 'bg-[#0F294A] text-white shadow-sm'
+                      : 'text-slate-700 hover:text-slate-900'
+                  }`}
+                >
+                  1. Ajukan ke Super Admin
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setForgotTab('reset');
+                    setError('');
+                    setSuccessNotice('');
+                  }}
+                  className={`py-2 px-3 text-xs font-bold rounded-lg transition-colors ${
+                    forgotTab === 'reset'
+                      ? 'bg-[#0F294A] text-white shadow-sm'
+                      : 'text-slate-700 hover:text-slate-900'
+                  }`}
+                >
+                  2. Pakai Kode Pemulihan
+                </button>
+              </div>
+
+              {error && (
+                <div
+                  role="alert"
+                  className="p-3.5 rounded-xl bg-red-50 border border-red-200 text-sm text-red-700"
+                >
+                  {error}
+                </div>
+              )}
+
+              {successNotice && (
+                <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-sm text-emerald-800 space-y-2">
+                  <p>{successNotice}</p>
+                  {forgotTab === 'request' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setForgotTab('reset');
+                        setSuccessNotice('');
+                      }}
+                      className="text-xs font-bold text-[#0F294A] underline hover:text-[#EA580C]"
+                    >
+                      Sudah menerima kode pemulihan? Masukkan di sini
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {forgotTab === 'request' ? (
+                <form onSubmit={handleRequestPasswordReset} className="space-y-4">
+                  <div className="p-3.5 rounded-xl bg-blue-50 border border-blue-200 text-xs text-[#0F294A] leading-relaxed flex items-start gap-2.5">
+                    <LifeBuoy className="w-4 h-4 text-[#EA580C] shrink-0 mt-0.5" aria-hidden="true" />
+                    <span>
+                      Kirim permintaan reset kata sandi ke <strong>Super Admin</strong>. Setelah
+                      disetujui, Super Admin akan memberikan kode pemulihan 1x pakai (berlaku 15
+                      menit) atau mengatur sandi baru untuk akun Anda.
+                    </span>
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="forgot-username"
+                      className="block text-sm font-semibold text-slate-800 mb-1.5"
+                    >
+                      NIP / Username Akun *
+                    </label>
+                    <input
+                      id="forgot-username"
+                      type="text"
+                      required
+                      value={username}
+                      onChange={(e) => setUsername(e.target.value)}
+                      placeholder="Masukkan NIP atau Username Anda"
+                      className="w-full min-h-[44px] px-3.5 py-2.5 text-sm rounded-xl border border-slate-300 bg-white focus:outline-none focus:border-[#0F294A] focus:ring-2 focus:ring-[#EA580C]/25"
+                    />
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="forgot-note"
+                      className="block text-sm font-semibold text-slate-800 mb-1.5"
+                    >
+                      Keterangan / Unit Kerja (Opsional)
+                    </label>
+                    <input
+                      id="forgot-note"
+                      type="text"
+                      maxLength={200}
+                      value={resetNote}
+                      onChange={(e) => setResetNote(e.target.value)}
+                      placeholder="Contoh: Petugas Piket Loket / Lupa sandi"
+                      className="w-full min-h-[44px] px-3.5 py-2.5 text-sm rounded-xl border border-slate-300 bg-white focus:outline-none focus:border-[#0F294A] focus:ring-2 focus:ring-[#EA580C]/25"
+                    />
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row gap-3 pt-1">
+                    <button
+                      type="submit"
+                      disabled={submitting}
+                      className="flex-1 inline-flex items-center justify-center gap-2 px-5 py-3 min-h-[46px] text-sm font-semibold text-white bg-[#EA580C] hover:bg-[#C2410C] disabled:opacity-60 rounded-xl transition-colors"
+                    >
+                      <Send className="w-4 h-4 shrink-0" aria-hidden="true" />
+                      <span>{submitting ? 'Mengirim...' : 'Kirim Permintaan Reset'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setViewMode('login');
+                        setError('');
+                        setSuccessNotice('');
+                      }}
+                      className="inline-flex items-center justify-center gap-1.5 px-4 py-3 min-h-[46px] text-sm font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-100 rounded-xl transition-colors"
+                    >
+                      <ArrowLeft className="w-4 h-4 shrink-0" aria-hidden="true" />
+                      <span>Kembali Login</span>
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <form onSubmit={handleCompletePasswordReset} className="space-y-4">
+                  <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-950 leading-relaxed">
+                    Masukkan <strong>Kode Pemulihan 1x Pakai</strong> dari Super Admin, atau{' '}
+                    <strong>ADMIN_RECOVERY_KEY</strong> server untuk pemulihan darurat Super Admin.
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="reset-username"
+                      className="block text-sm font-semibold text-slate-800 mb-1.5"
+                    >
+                      NIP / Username *
+                    </label>
+                    <input
+                      id="reset-username"
+                      type="text"
+                      required
+                      value={username}
+                      onChange={(e) => setUsername(e.target.value)}
+                      placeholder="Masukkan NIP atau Username"
+                      className="w-full min-h-[44px] px-3.5 py-2.5 text-sm rounded-xl border border-slate-300 bg-white focus:outline-none focus:border-[#0F294A] focus:ring-2 focus:ring-[#EA580C]/25"
+                    />
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="reset-code"
+                      className="block text-sm font-semibold text-slate-800 mb-1.5"
+                    >
+                      Kode Pemulihan / Recovery Key *
+                    </label>
+                    <input
+                      id="reset-code"
+                      type="text"
+                      required
+                      value={recoveryCode}
+                      onChange={(e) => setRecoveryCode(e.target.value)}
+                      placeholder="Contoh: A1B2C-3D4E5"
+                      className="w-full min-h-[44px] px-3.5 py-2.5 text-sm rounded-xl border border-slate-300 bg-white focus:outline-none focus:border-[#0F294A] focus:ring-2 focus:ring-[#EA580C]/25"
+                    />
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="reset-new-password"
+                      className="block text-sm font-semibold text-slate-800 mb-1.5"
+                    >
+                      Kata Sandi Baru (min. 8 karakter) *
+                    </label>
+                    <div className="relative">
+                      <input
+                        id="reset-new-password"
+                        type={showNewResetPassword ? 'text' : 'password'}
+                        required
+                        minLength={8}
+                        value={newResetPassword}
+                        onChange={(e) => setNewResetPassword(e.target.value)}
+                        placeholder="Masukkan kata sandi baru"
+                        className="w-full min-h-[44px] pl-3.5 pr-11 py-2.5 text-sm rounded-xl border border-slate-300 bg-white focus:outline-none focus:border-[#0F294A] focus:ring-2 focus:ring-[#EA580C]/25"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowNewResetPassword((v) => !v)}
+                        aria-label={showNewResetPassword ? 'Sembunyikan sandi' : 'Lihat sandi'}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-slate-500 hover:text-[#0F294A] rounded-lg"
+                      >
+                        {showNewResetPassword ? (
+                          <EyeOff className="w-4 h-4" />
+                        ) : (
+                          <Eye className="w-4 h-4" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="reset-confirm-password"
+                      className="block text-sm font-semibold text-slate-800 mb-1.5"
+                    >
+                      Konfirmasi Kata Sandi Baru *
+                    </label>
+                    <input
+                      id="reset-confirm-password"
+                      type={showNewResetPassword ? 'text' : 'password'}
+                      required
+                      minLength={8}
+                      value={confirmResetPassword}
+                      onChange={(e) => setConfirmResetPassword(e.target.value)}
+                      placeholder="Ulangi kata sandi baru"
+                      className="w-full min-h-[44px] px-3.5 py-2.5 text-sm rounded-xl border border-slate-300 bg-white focus:outline-none focus:border-[#0F294A] focus:ring-2 focus:ring-[#EA580C]/25"
+                    />
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row gap-3 pt-1">
+                    <button
+                      type="submit"
+                      disabled={submitting}
+                      className="flex-1 inline-flex items-center justify-center gap-2 px-5 py-3 min-h-[46px] text-sm font-semibold text-white bg-[#0F294A] hover:bg-[#091B33] disabled:opacity-60 rounded-xl transition-colors"
+                    >
+                      <KeyRound className="w-4 h-4 shrink-0" aria-hidden="true" />
+                      <span>{submitting ? 'Menyimpan...' : 'Simpan Kata Sandi Baru'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setViewMode('login');
+                        setError('');
+                        setSuccessNotice('');
+                      }}
+                      className="inline-flex items-center justify-center gap-1.5 px-4 py-3 min-h-[46px] text-sm font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-100 rounded-xl transition-colors"
+                    >
+                      <ArrowLeft className="w-4 h-4 shrink-0" aria-hidden="true" />
+                      <span>Kembali Login</span>
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
           ) : (
             <form onSubmit={handleLogin} className="space-y-5">
               <p className="text-sm text-slate-600">
@@ -303,6 +655,12 @@ export function AdminLoginView({ onAuthenticated, onBackToPublic }: AdminLoginVi
                   className="p-3.5 rounded-xl bg-red-50 border border-red-200 text-sm text-red-700"
                 >
                   {error}
+                </div>
+              )}
+
+              {successNotice && (
+                <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-sm text-emerald-800">
+                  {successNotice}
                 </div>
               )}
 
@@ -326,12 +684,26 @@ export function AdminLoginView({ onAuthenticated, onBackToPublic }: AdminLoginVi
               </div>
 
               <div>
-                <label
-                  htmlFor="login-password"
-                  className="block text-sm font-semibold text-slate-800 mb-1.5"
-                >
-                  Kata Sandi
-                </label>
+                <div className="flex items-center justify-between gap-2 mb-1.5">
+                  <label
+                    htmlFor="login-password"
+                    className="block text-sm font-semibold text-slate-800"
+                  >
+                    Kata Sandi
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setViewMode('forgot');
+                      setForgotTab('request');
+                      setError('');
+                      setSuccessNotice('');
+                    }}
+                    className="text-xs font-semibold text-[#EA580C] hover:text-[#C2410C] hover:underline"
+                  >
+                    Lupa Kata Sandi?
+                  </button>
+                </div>
                 <div className="relative">
                   <input
                     id="login-password"

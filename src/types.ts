@@ -60,6 +60,19 @@ export interface AuditLogRecord {
   createdAt: number;
 }
 
+export interface PasswordResetRequestRecord {
+  id: string;
+  userId: string;
+  username: string;
+  fullName: string;
+  role: UserRole | string;
+  note: string;
+  status: 'pending' | 'token_issued' | 'completed' | 'rejected';
+  tokenExpiresAt: number | null;
+  createdAt: number;
+  resolvedAt: number | null;
+}
+
 export interface VisitRecord {
   id: string;
   queueNumber: number;

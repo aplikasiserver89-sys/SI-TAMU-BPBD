@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Building2, Eye, EyeOff, KeyRound, Plus, Shield, UserPlus } from 'lucide-react';
+import { Building2, Copy, Eye, EyeOff, KeyRound, LifeBuoy, Plus, Shield, UserPlus } from 'lucide-react';
 import {
   ROLE_LABELS,
   USER_ROLES,
@@ -7,6 +7,7 @@ import {
   type AuthUser,
   type DepartmentRecord,
   type ManagedUser,
+  type PasswordResetRequestRecord,
   type UserRole,
 } from '../types';
 import { formatShortDate, formatWibTime } from '../lib/format';
@@ -28,6 +29,12 @@ export function AdminManagementPanel({
 }: AdminManagementPanelProps) {
   const [departments, setDepartments] = useState<DepartmentRecord[]>([]);
   const [users, setUsers] = useState<ManagedUser[]>([]);
+  const [resetRequests, setResetRequests] = useState<PasswordResetRequestRecord[]>([]);
+  const [issuedCodeInfo, setIssuedCodeInfo] = useState<{
+    requestId: string;
+    username: string;
+    recoveryCode: string;
+  } | null>(null);
   const [auditLogs, setAuditLogs] = useState<AuditLogRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -71,8 +78,11 @@ export function AdminManagementPanel({
       }
 
       if (mode === 'users') {
-        const userRes = await fetch('/api/admin/users', { headers });
-        if (userRes.status === 401) {
+        const [userRes, resetRes] = await Promise.all([
+          fetch('/api/admin/users', { headers }),
+          fetch('/api/admin/password-reset-requests', { headers }),
+        ]);
+        if (userRes.status === 401 || resetRes.status === 401) {
           onSessionExpired();
           return;
         }
@@ -82,6 +92,10 @@ export function AdminManagementPanel({
           return;
         }
         setUsers(userData.users || []);
+        if (resetRes.ok) {
+          const resetData = await resetRes.json();
+          setResetRequests(resetData.requests || []);
+        }
       }
 
       if (mode === 'audit') {
@@ -286,6 +300,69 @@ export function AdminManagementPanel({
       setResetTargetId(null);
       setResetPasswordValue('');
       setNotice(`Kata sandi akun "${data.user.username}" berhasil diperbarui.`);
+      await loadData();
+    } catch {
+      setError('Gagal terhubung ke server.');
+    }
+  };
+
+  const handleIssueRecoveryCode = async (reqItem: PasswordResetRequestRecord) => {
+    setError('');
+    setNotice('');
+    try {
+      const res = await fetch(
+        `/api/admin/password-reset-requests/${encodeURIComponent(reqItem.id)}/issue-token`,
+        {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      );
+      if (res.status === 401) {
+        onSessionExpired();
+        return;
+      }
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || 'Gagal membuat kode pemulihan.');
+        return;
+      }
+      setIssuedCodeInfo({
+        requestId: reqItem.id,
+        username: reqItem.username,
+        recoveryCode: data.recoveryCode,
+      });
+      setNotice(
+        `Kode pemulihan 1x pakai untuk "${reqItem.username}" berhasil dibuat (berlaku 15 menit).`,
+      );
+      await loadData();
+    } catch {
+      setError('Gagal terhubung ke server.');
+    }
+  };
+
+  const handleDismissResetRequest = async (reqItem: PasswordResetRequestRecord) => {
+    setError('');
+    try {
+      const res = await fetch(
+        `/api/admin/password-reset-requests/${encodeURIComponent(reqItem.id)}/dismiss`,
+        {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      );
+      if (res.status === 401) {
+        onSessionExpired();
+        return;
+      }
+      if (!res.ok) {
+        const data = await res.json();
+        setError(data.error || 'Gagal menutup permintaan reset.');
+        return;
+      }
+      if (issuedCodeInfo?.requestId === reqItem.id) {
+        setIssuedCodeInfo(null);
+      }
+      await loadData();
     } catch {
       setError('Gagal terhubung ke server.');
     }
@@ -386,7 +463,103 @@ export function AdminManagementPanel({
       )}
 
       {mode === 'users' && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        <div className="space-y-6">
+          {/* Permintaan Lupa Kata Sandi Pegawai */}
+          {resetRequests.some((r) => r.status === 'pending' || r.status === 'token_issued') && (
+            <div className="bg-[#FFF7ED] border border-orange-200 rounded-2xl overflow-hidden shadow-lg">
+              <div className="px-6 py-4 bg-gradient-to-r from-[#EA580C] to-[#C2410C] text-white flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5">
+                  <LifeBuoy className="w-5 h-5 shrink-0" aria-hidden="true" />
+                  <div>
+                    <h2 className="text-base font-bold">Permintaan Lupa Kata Sandi</h2>
+                    <p className="text-xs text-orange-50">
+                      Terbitkan kode pemulihan 1x pakai atau reset sandi langsung untuk pegawai
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {issuedCodeInfo && (
+                <div className="mx-6 mt-4 p-4 rounded-xl bg-white border-2 border-[#0F294A] flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold text-slate-600">
+                      Kode Pemulihan 1x Pakai untuk{' '}
+                      <span className="font-bold text-[#0F294A]">{issuedCodeInfo.username}</span>{' '}
+                      (berlaku 15 menit):
+                    </p>
+                    <p className="mt-1 text-xl font-bold tracking-wider text-[#EA580C]">
+                      {issuedCodeInfo.recoveryCode}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard?.writeText(issuedCodeInfo.recoveryCode);
+                      setNotice(`Kode ${issuedCodeInfo.recoveryCode} disalin ke clipboard.`);
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-[#0F294A] hover:bg-[#091B33] rounded-lg"
+                  >
+                    <Copy className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                    <span>Salin Kode</span>
+                  </button>
+                </div>
+              )}
+
+              <div className="p-5 space-y-3">
+                {resetRequests
+                  .filter((r) => r.status === 'pending' || r.status === 'token_issued')
+                  .map((reqItem) => {
+                    const iso = new Date(reqItem.createdAt).toISOString();
+                    return (
+                      <div
+                        key={reqItem.id}
+                        className="bg-white border border-orange-200/80 rounded-xl p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3"
+                      >
+                        <div className="space-y-0.5">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-bold text-[#0F294A]">{reqItem.fullName}</span>
+                            <span className="text-xs px-2 py-0.5 rounded bg-slate-100 text-slate-700 font-semibold">
+                              {reqItem.username}
+                            </span>
+                            <span className="text-xs font-semibold text-[#EA580C]">
+                              {ROLE_LABELS[reqItem.role as UserRole] || reqItem.role}
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-600">
+                            Diajukan {formatShortDate(iso)} · {formatWibTime(iso)}
+                            {reqItem.note ? ` · Keterangan: "${reqItem.note}"` : ''}
+                          </p>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => handleIssueRecoveryCode(reqItem)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-white bg-[#0F294A] hover:bg-[#091B33] rounded-lg"
+                          >
+                            <KeyRound className="w-3.5 h-3.5" aria-hidden="true" />
+                            <span>
+                              {reqItem.status === 'token_issued'
+                                ? 'Buat Kode Baru'
+                                : 'Terbitkan Kode Pemulihan'}
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDismissResetRequest(reqItem)}
+                            className="px-3 py-1.5 text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg"
+                          >
+                            Tutup
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
           {/* Create User Form */}
           <form
             onSubmit={handleCreateUser}
@@ -600,6 +773,7 @@ export function AdminManagementPanel({
                 </tbody>
               </table>
             </div>
+          </div>
           </div>
         </div>
       )}
