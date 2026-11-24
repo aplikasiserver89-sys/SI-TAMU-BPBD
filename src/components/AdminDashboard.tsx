@@ -31,7 +31,6 @@ import {
 import {
   ApiError,
   deleteVisitRecord,
-  exportVisitsCsvBlob,
   fetchDashboardData,
   fetchPublicDepartments,
   updateVisitStatus,
@@ -47,6 +46,7 @@ import {
   getYearStartWib,
 } from '../lib/format';
 import { downloadDeskPosterPdf, downloadVisitReportPdf } from '../lib/pdfGenerator';
+import { downloadRecapExcel } from '../lib/excelGenerator';
 import { QrPosterStudio } from './QrPosterStudio';
 import { PrintPosterView, PrintReportView } from './PrintViews';
 import { ManualVisitModal } from './ManualVisitModal';
@@ -255,30 +255,26 @@ export function AdminDashboard({
     }
   };
 
-  const handleExportCsv = async () => {
+  const handleExportExcel = () => {
     if (!canExport) return;
     setExportingCsv(true);
     setError('');
     try {
-      const { blob, filename } = await exportVisitsCsvBlob(token, {
-        search: search.trim(),
-        department: departmentFilter,
-        status: statusFilter,
-        dateFrom,
-        dateTo,
+      const selectedRecap = stats.periodRecap?.find((item) => item.key === quickPreset);
+      const periodLabel = selectedRecap?.label || (quickPreset === 'today' ? 'Hari Ini' : 'Semua Periode');
+      const periodRangeLabel =
+        selectedRecap?.rangeLabel ||
+        (dateFrom && dateTo ? `${dateFrom} s.d. ${dateTo}` : 'Semua Riwayat');
+
+      downloadRecapExcel({
+        visits,
+        stats,
+        periodLabel,
+        periodRangeLabel,
+        departmentFilter: effectiveDepartmentLabel,
       });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = filename;
-      link.click();
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 401) {
-        onSessionExpired();
-        return;
-      }
-      setError(err instanceof Error ? err.message : 'Gagal mengunduh file Excel (CSV).');
+    } catch {
+      setError('Gagal membuat file laporan Excel (.xlsx).');
     } finally {
       setExportingCsv(false);
     }
@@ -570,11 +566,11 @@ export function AdminDashboard({
                         <button
                           type="button"
                           disabled={exportingCsv}
-                          onClick={handleExportCsv}
-                          className="inline-flex items-center gap-1.5 px-3.5 py-2 min-h-[38px] text-xs font-semibold text-[#0F294A] bg-white hover:bg-slate-100 rounded-xl transition-colors"
+                          onClick={handleExportExcel}
+                          className="inline-flex items-center gap-1.5 px-3.5 py-2 min-h-[38px] text-xs font-semibold text-white bg-[#28A745] hover:bg-[#1E7E34] disabled:opacity-60 rounded-xl transition-colors"
                         >
                           <FileSpreadsheet className="w-4 h-4 shrink-0" aria-hidden="true" />
-                          <span>Export CSV</span>
+                          <span>{exportingCsv ? 'Menyiapkan Excel...' : 'Export Excel (.xlsx)'}</span>
                         </button>
                         <button
                           type="button"
@@ -810,11 +806,11 @@ export function AdminDashboard({
                       <button
                         type="button"
                         disabled={exportingCsv}
-                        onClick={handleExportCsv}
-                        className="inline-flex items-center gap-2 px-3.5 py-2 min-h-[42px] text-xs sm:text-sm font-semibold text-[#0F294A] bg-white border border-slate-300 hover:bg-slate-100 disabled:opacity-60 rounded-xl transition-colors whitespace-nowrap shrink-0"
+                        onClick={handleExportExcel}
+                        className="inline-flex items-center gap-2 px-3.5 py-2 min-h-[42px] text-xs sm:text-sm font-semibold text-white bg-[#28A745] hover:bg-[#1E7E34] disabled:opacity-60 rounded-xl transition-colors whitespace-nowrap shrink-0"
                       >
                         <FileSpreadsheet className="w-4 h-4 shrink-0" aria-hidden="true" />
-                        <span>{exportingCsv ? 'Mengunduh...' : 'Export CSV'}</span>
+                        <span>{exportingCsv ? 'Menyiapkan Excel...' : 'Export Excel'}</span>
                       </button>
 
                       <button
