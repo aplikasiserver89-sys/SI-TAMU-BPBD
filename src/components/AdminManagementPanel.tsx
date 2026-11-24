@@ -1,5 +1,18 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Building2, Copy, Eye, EyeOff, KeyRound, LifeBuoy, Plus, Shield, UserPlus } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  Building2,
+  Check,
+  Copy,
+  Eye,
+  EyeOff,
+  KeyRound,
+  LifeBuoy,
+  Pencil,
+  Plus,
+  Shield,
+  UserPlus,
+  X,
+} from 'lucide-react';
 import {
   ROLE_LABELS,
   USER_ROLES,
@@ -53,9 +66,13 @@ export function AdminManagementPanel({
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
 
-  // New department form
+  // New & edit department form
+  const deptInputRef = useRef<HTMLInputElement>(null);
   const [newDeptName, setNewDeptName] = useState('');
+  const [deptFieldError, setDeptFieldError] = useState('');
   const [savingDept, setSavingDept] = useState(false);
+  const [editingDeptId, setEditingDeptId] = useState<string | null>(null);
+  const [editingDeptName, setEditingDeptName] = useState('');
 
   // New user form
   const [newUsername, setNewUsername] = useState('');
@@ -110,16 +127,34 @@ export function AdminManagementPanel({
   const handleAddDepartment = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setDeptFieldError('');
     setNotice('');
-    if (newDeptName.trim().length < 3) {
-      setError('Nama bidang minimal 3 karakter.');
+    const rawValue = newDeptName.trim() ? newDeptName : deptInputRef.current?.value || '';
+    const candidateName = rawValue.trim();
+
+    if (candidateName.length < 3) {
+      const msg =
+        candidateName.length === 0
+          ? 'Silakan ketik nama bidang baru pada kolom input terlebih dahulu (minimal 3 karakter).'
+          : 'Nama bidang minimal 3 karakter.';
+      setDeptFieldError(msg);
+      setError(msg);
+      deptInputRef.current?.focus();
       return;
     }
+
     setSavingDept(true);
     try {
-      const dept = await createAdminDepartment(token, newDeptName.trim());
+      const dept = await createAdminDepartment(token, candidateName);
       setNewDeptName('');
-      setNotice(`Bidang "${dept.name}" berhasil ditambahkan.`);
+      if (deptInputRef.current) {
+        deptInputRef.current.value = '';
+      }
+      setDepartments((prev) => {
+        if (prev.some((d) => d.id === dept.id)) return prev;
+        return [...prev, dept];
+      });
+      setNotice(`Bidang "${dept.name}" berhasil ditambahkan dan aktif di Formulir Tamu.`);
       onDepartmentsUpdated();
       await loadData();
     } catch (err) {
@@ -127,7 +162,36 @@ export function AdminManagementPanel({
         onSessionExpired();
         return;
       }
-      setError(err instanceof Error ? err.message : 'Gagal menambahkan bidang.');
+      const msg = err instanceof Error ? err.message : 'Gagal menambahkan bidang.';
+      setDeptFieldError(msg);
+      setError(msg);
+    } finally {
+      setSavingDept(false);
+    }
+  };
+
+  const handleSaveDepartmentName = async (dept: DepartmentRecord) => {
+    const trimmed = editingDeptName.trim();
+    setError('');
+    setNotice('');
+    if (trimmed.length < 3) {
+      setError('Nama bidang minimal 3 karakter.');
+      return;
+    }
+    setSavingDept(true);
+    try {
+      const updated = await updateAdminDepartment(token, dept.id, { name: trimmed });
+      setEditingDeptId(null);
+      setEditingDeptName('');
+      setNotice(`Nama bidang diperbarui menjadi "${updated.name}".`);
+      onDepartmentsUpdated();
+      await loadData();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        onSessionExpired();
+        return;
+      }
+      setError(err instanceof Error ? err.message : 'Gagal mengubah nama bidang.');
     } finally {
       setSavingDept(false);
     }
@@ -296,8 +360,8 @@ export function AdminManagementPanel({
 
       {mode === 'departments' && (
         <div className="bg-[#F8FAFC] border border-white/25 rounded-2xl overflow-hidden shadow-xl">
-          <div className="px-6 py-5 bg-gradient-to-r from-[#0F294A] to-[#1A4275] text-white flex items-center gap-3">
-            <Building2 className="w-5 h-5 text-[#FB923C]" aria-hidden="true" />
+          <div className="px-5 sm:px-6 py-4 sm:py-5 bg-gradient-to-r from-[#0F294A] to-[#1A4275] text-white flex items-center gap-3">
+            <Building2 className="w-5 h-5 text-[#FB923C] shrink-0" aria-hidden="true" />
             <div>
               <h2 className="font-display text-base font-bold">Master Data Bidang Tujuan</h2>
               <p className="text-xs text-slate-200">
@@ -306,44 +370,133 @@ export function AdminManagementPanel({
             </div>
           </div>
 
-          <div className="p-6 space-y-6">
-            <form onSubmit={handleAddDepartment} className="flex flex-col sm:flex-row gap-3">
-              <input
-                type="text"
-                value={newDeptName}
-                onChange={(e) => setNewDeptName(e.target.value)}
-                placeholder="Tambah nama bidang / unit layanan baru..."
-                className="flex-1 min-h-[44px] px-3.5 py-2 text-sm rounded-xl border border-slate-300 bg-white"
-              />
-              <button
-                type="submit"
-                disabled={savingDept}
-                className="inline-flex items-center justify-center gap-2 px-5 py-2.5 min-h-[44px] text-sm font-semibold text-white bg-[#EA580C] hover:bg-[#C2410C] rounded-xl whitespace-nowrap"
-              >
-                <Plus className="w-4 h-4 shrink-0" aria-hidden="true" />
-                <span>{savingDept ? 'Menyimpan...' : 'Tambah Bidang'}</span>
-              </button>
+          <div className="p-4 sm:p-6 space-y-5">
+            <form
+              onSubmit={handleAddDepartment}
+              noValidate
+              className="bg-white border border-slate-200 rounded-xl p-4 space-y-3"
+            >
+              <div>
+                <label
+                  htmlFor="new-dept-name"
+                  className="block text-xs sm:text-sm font-bold text-[#0F294A] mb-1.5"
+                >
+                  Nama Bidang / Unit Layanan Baru *
+                </label>
+                <div className="flex flex-col sm:flex-row gap-2.5">
+                  <input
+                    ref={deptInputRef}
+                    id="new-dept-name"
+                    type="text"
+                    maxLength={100}
+                    value={newDeptName}
+                    onChange={(e) => {
+                      setNewDeptName(e.target.value);
+                      if (deptFieldError) setDeptFieldError('');
+                    }}
+                    placeholder="Ketik nama bidang baru, misal: Bidang Logistik..."
+                    className={`flex-1 min-h-[44px] px-3.5 py-2 text-sm rounded-xl border bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 ${
+                      deptFieldError
+                        ? 'border-red-500 focus:border-red-600 focus:ring-red-200'
+                        : 'border-slate-300 focus:border-[#0F294A] focus:ring-[#EA580C]/25'
+                    }`}
+                  />
+                  <button
+                    type="submit"
+                    disabled={savingDept}
+                    className="inline-flex items-center justify-center gap-2 px-5 py-2.5 min-h-[44px] text-sm font-semibold text-white bg-[#EA580C] hover:bg-[#C2410C] disabled:opacity-60 rounded-xl whitespace-nowrap transition-colors"
+                  >
+                    <Plus className="w-4 h-4 shrink-0" aria-hidden="true" />
+                    <span>{savingDept ? 'Menyimpan...' : 'Simpan Bidang'}</span>
+                  </button>
+                </div>
+                {deptFieldError ? (
+                  <p className="mt-1.5 text-xs font-medium text-red-600">{deptFieldError}</p>
+                ) : (
+                  <p className="mt-1.5 text-xs text-slate-500">
+                    Ketik nama bidang pada kolom di atas lalu tekan <strong>Simpan Bidang</strong>.
+                  </p>
+                )}
+              </div>
             </form>
 
-            <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-              <table className="w-full text-left border-collapse text-sm">
-                <thead>
-                  <tr className="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600">
-                    <th className="py-3 px-4">Nama Bidang / Unit Kerja</th>
-                    <th className="py-3 px-4">Status Form Publik</th>
-                    <th className="py-3 px-4 text-right">Aksi</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {departments.map((dept) => (
-                    <tr key={dept.id} className="hover:bg-slate-50/70">
-                      <td className="py-3 px-4 font-semibold text-[#0F294A]">{dept.name}</td>
-                      <td className="py-3 px-4 text-xs font-semibold">
-                        <span className={dept.isActive ? 'text-emerald-700' : 'text-slate-500'}>
-                          {dept.isActive ? 'Aktif Ditampilkan' : 'Nonaktif'}
-                        </span>
-                      </td>
-                      <td className="py-3 px-4 text-right">
+            <div className="bg-white border border-slate-200 rounded-xl overflow-hidden divide-y divide-slate-100">
+              <div className="hidden sm:grid sm:grid-cols-12 bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600 py-3 px-4">
+                <div className="col-span-6">Nama Bidang / Unit Kerja</div>
+                <div className="col-span-3">Status Form Publik</div>
+                <div className="col-span-3 text-right">Aksi</div>
+              </div>
+
+              {departments.map((dept) => {
+                const isEditing = editingDeptId === dept.id;
+                return (
+                  <div
+                    key={dept.id}
+                    className="p-4 hover:bg-slate-50/70 flex flex-col sm:grid sm:grid-cols-12 sm:items-center gap-3"
+                  >
+                    <div className="sm:col-span-6 min-w-0">
+                      {isEditing ? (
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            maxLength={100}
+                            value={editingDeptName}
+                            onChange={(e) => setEditingDeptName(e.target.value)}
+                            aria-label="Ubah nama bidang"
+                            className="flex-1 min-h-[38px] px-3 py-1.5 text-sm rounded-lg border border-slate-300 bg-white text-slate-900"
+                          />
+                          <button
+                            type="button"
+                            disabled={savingDept}
+                            onClick={() => handleSaveDepartmentName(dept)}
+                            aria-label="Simpan perubahan nama bidang"
+                            className="p-2 min-h-[36px] min-w-[36px] rounded-lg bg-emerald-600 text-white hover:bg-emerald-700"
+                          >
+                            <Check className="w-4 h-4" aria-hidden="true" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingDeptId(null);
+                              setEditingDeptName('');
+                            }}
+                            aria-label="Batal ubah nama bidang"
+                            className="p-2 min-h-[36px] min-w-[36px] rounded-lg bg-slate-100 text-slate-600 hover:bg-slate-200"
+                          >
+                            <X className="w-4 h-4" aria-hidden="true" />
+                          </button>
+                        </div>
+                      ) : (
+                        <p className="font-semibold text-sm text-[#0F294A] break-words">
+                          {dept.name}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="sm:col-span-3 flex items-center justify-between sm:justify-start">
+                      <span
+                        className={`inline-flex items-center px-2.5 py-1 rounded-md text-xs font-semibold ${
+                          dept.isActive
+                            ? 'bg-emerald-50 text-emerald-700'
+                            : 'bg-slate-100 text-slate-500'
+                        }`}
+                      >
+                        {dept.isActive ? 'Aktif Ditampilkan' : 'Nonaktif'}
+                      </span>
+
+                      <div className="flex sm:hidden items-center gap-1.5">
+                        {!isEditing && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingDeptId(dept.id);
+                              setEditingDeptName(dept.name);
+                            }}
+                            className="px-2.5 py-1.5 text-xs font-semibold rounded-lg bg-slate-100 text-slate-700 hover:bg-slate-200"
+                          >
+                            Edit
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => handleToggleDepartment(dept)}
@@ -355,11 +508,39 @@ export function AdminManagementPanel({
                         >
                           {dept.isActive ? 'Nonaktifkan' : 'Aktifkan'}
                         </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                      </div>
+                    </div>
+
+                    <div className="hidden sm:flex sm:col-span-3 items-center justify-end gap-2">
+                      {!isEditing && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingDeptId(dept.id);
+                            setEditingDeptName(dept.name);
+                          }}
+                          title="Ubah Nama Bidang"
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg bg-slate-100 text-slate-700 hover:bg-slate-200"
+                        >
+                          <Pencil className="w-3.5 h-3.5" aria-hidden="true" />
+                          <span>Edit</span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleToggleDepartment(dept)}
+                        className={`px-3 py-1.5 text-xs font-semibold rounded-lg ${
+                          dept.isActive
+                            ? 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                            : 'bg-[#0F294A] text-white hover:bg-[#091B33]'
+                        }`}
+                      >
+                        {dept.isActive ? 'Nonaktifkan' : 'Aktifkan'}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>
