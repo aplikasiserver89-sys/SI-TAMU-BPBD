@@ -1,0 +1,6 @@
+{
+  "name": "SI-TAMU BPBD - Sistem Buku Tamu Digital BPBD Kabupaten Sidoarjo",
+  "description": "Sistem Buku Tamu Digital resmi BPBD Kabupaten Sidoarjo dengan form tamu QR Code, tanda tangan digital, bukti registrasi, dan dashboard admin.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
