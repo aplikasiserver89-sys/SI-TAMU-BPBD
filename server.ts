@@ -30,6 +30,7 @@ import {
   verifyUserToken,
   type UserRole,
 } from './server/auth.ts';
+import { getSupportResetEmail, isSmtpConfigured, sendPasswordResetEmail } from './server/mailer.ts';
 
 const PORT = 3000;
 const VISITOR_CATEGORIES = new Set([
@@ -374,6 +375,8 @@ async function startServer() {
       source: credState.source,
       authenticated: Boolean(user),
       user,
+      supportEmail: getSupportResetEmail(),
+      smtpConfigured: isSmtpConfigured(),
     });
   });
 
@@ -490,8 +493,8 @@ async function startServer() {
     res.json({ ok: true });
   });
 
-  // Public (Rate-Limited): Forgot Password Request to Super Admin
-  app.post('/api/admin/forgot-password', (req: Request, res: Response) => {
+  // Public (Rate-Limited): Forgot Password Request to Super Admin & Helpdesk Email
+  app.post('/api/admin/forgot-password', async (req: Request, res: Response) => {
     const ip = req.ip || 'unknown';
     if (!checkRateLimit(ip)) {
       res.status(429).json({
@@ -509,6 +512,9 @@ async function startServer() {
       return;
     }
 
+    const supportEmail = getSupportResetEmail();
+    const smtpReady = isSmtpConfigured();
+
     const userRow = db
       .prepare('SELECT * FROM users WHERE LOWER(username) = LOWER(?) AND is_active = 1')
       .get(username) as unknown as UserRow | undefined;
@@ -517,40 +523,99 @@ async function startServer() {
       const now = Date.now();
       const recentReq = db
         .prepare(
-          "SELECT id FROM password_reset_requests WHERE user_id = ? AND status = 'pending' AND created_at > ?",
+          "SELECT id FROM password_reset_requests WHERE user_id = ? AND status IN ('pending', 'token_issued') AND created_at > ?",
         )
         .get(userRow.id, now - 2 * 60 * 1000) as { id: string } | undefined;
 
       if (!recentReq) {
-        db.prepare(
-          `INSERT INTO password_reset_requests (
-            id, user_id, username, full_name, role, note, status, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)`,
-        ).run(
-          crypto.randomUUID(),
-          userRow.id,
-          userRow.username,
-          userRow.full_name,
-          userRow.role,
-          note,
-          now,
-        );
+        const reqId = crypto.randomUUID();
+        let emailSentForUser = false;
 
-        recordAuditLog(
-          userRow.username,
-          userRow.role,
-          'REQUEST_PASSWORD_RESET',
-          userRow.username,
-          note ? `Pengajuan lupa password: ${note}` : 'Mengajukan reset kata sandi',
-        );
+        if (smtpReady) {
+          const rawCode = crypto.randomBytes(5).toString('hex').toUpperCase();
+          const recoveryCode = `${rawCode.slice(0, 5)}-${rawCode.slice(5)}`;
+          const tokenHash = hashCheckoutToken(rawCode);
+          const expiresAt = now + 15 * 60 * 1000;
+
+          const requestedAtWib = new Intl.DateTimeFormat('id-ID', {
+            timeZone: 'Asia/Jakarta',
+            dateStyle: 'medium',
+            timeStyle: 'short',
+          }).format(new Date(now));
+
+          const mailResult = await sendPasswordResetEmail({
+            username: userRow.username,
+            fullName: userRow.full_name,
+            role: userRow.role,
+            note,
+            recoveryCode,
+            requestedAtWib: `${requestedAtWib} WIB`,
+          });
+
+          if (mailResult.sent) {
+            emailSentForUser = true;
+            db.prepare(
+              `INSERT INTO password_reset_requests (
+                id, user_id, username, full_name, role, note, status, token_hash, token_expires_at, created_at
+              ) VALUES (?, ?, ?, ?, ?, ?, 'token_issued', ?, ?, ?)`,
+            ).run(
+              reqId,
+              userRow.id,
+              userRow.username,
+              userRow.full_name,
+              userRow.role,
+              note,
+              tokenHash,
+              expiresAt,
+              now,
+            );
+
+            recordAuditLog(
+              userRow.username,
+              userRow.role,
+              'REQUEST_PASSWORD_RESET',
+              userRow.username,
+              `Kode pemulihan 1x pakai dikirim ke email bantuan ${supportEmail}`,
+            );
+          }
+        }
+
+        if (!emailSentForUser) {
+          db.prepare(
+            `INSERT INTO password_reset_requests (
+              id, user_id, username, full_name, role, note, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)`,
+          ).run(
+            reqId,
+            userRow.id,
+            userRow.username,
+            userRow.full_name,
+            userRow.role,
+            note,
+            now,
+          );
+
+          recordAuditLog(
+            userRow.username,
+            userRow.role,
+            'REQUEST_PASSWORD_RESET',
+            userRow.username,
+            note
+              ? `Pengajuan lupa password (bantuan email ${supportEmail}): ${note}`
+              : `Mengajukan reset kata sandi (bantuan email ${supportEmail})`,
+          );
+        }
       }
     }
 
-    // Non-enumerating response: same reply whether user exists or not
+    // Non-enumerating response: reply depends only on server SMTP configuration, never on user existence
     res.json({
       ok: true,
-      message:
-        'Permintaan reset kata sandi telah dicatat. Jika NIP / Username terdaftar dan aktif, silakan hubungi Super Admin (Pengadministrasi Umum) untuk mendapatkan kode pemulihan 1x pakai atau reset sandi.',
+      supportEmail,
+      emailSent: smtpReady,
+      message: smtpReady
+        ? `Permintaan reset kata sandi telah diproses. Jika NIP / Username terdaftar dan aktif, kode pemulihan 1x pakai telah dikirimkan ke email bantuan (${supportEmail}).`
+        : `Permintaan reset kata sandi telah dicatat untuk Super Admin. Gunakan tombol "Kirim via Email" di bawah untuk meneruskan permintaan langsung ke ${supportEmail}.`,
     });
   });
 

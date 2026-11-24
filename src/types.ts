@@ -131,4 +131,6 @@ export interface AdminAuthStatus {
   source: 'env' | 'database' | 'unconfigured';
   authenticated: boolean;
   user: AuthUser | null;
+  supportEmail?: string;
+  smtpConfigured?: boolean;
 }

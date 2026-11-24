@@ -1,5 +1,16 @@
 import { useEffect, useState } from 'react';
-import { ArrowLeft, Eye, EyeOff, KeyRound, LifeBuoy, Lock, Send, ShieldCheck, UserCheck } from 'lucide-react';
+import {
+  ArrowLeft,
+  Eye,
+  EyeOff,
+  KeyRound,
+  LifeBuoy,
+  Lock,
+  Mail,
+  Send,
+  ShieldCheck,
+  UserCheck,
+} from 'lucide-react';
 import type { AdminAuthStatus, AuthUser } from '../types';
 import { BpbdEmblem, SidoarjoLogo } from './BpbdEmblem';
 
@@ -27,10 +38,43 @@ export function AdminLoginView({ onAuthenticated, onBackToPublic }: AdminLoginVi
   const [newResetPassword, setNewResetPassword] = useState('');
   const [confirmResetPassword, setConfirmResetPassword] = useState('');
   const [showNewResetPassword, setShowNewResetPassword] = useState(false);
+  const [submittedResetInfo, setSubmittedResetInfo] = useState<{
+    username: string;
+    note: string;
+    emailSent: boolean;
+  } | null>(null);
 
   const [error, setError] = useState('');
   const [successNotice, setSuccessNotice] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  const supportEmail = authStatus?.supportEmail || 'aplikasiserver89@gmail.com';
+
+  const buildMailtoHref = (targetUsername: string, targetNote: string) => {
+    const cleanUser = targetUsername.trim();
+    const cleanNote = targetNote.trim();
+    const waktuWib = new Intl.DateTimeFormat('id-ID', {
+      timeZone: 'Asia/Jakarta',
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    }).format(new Date());
+    const subject = encodeURIComponent(
+      `[SI-TAMU BPBD] Permintaan Reset Kata Sandi - ${cleanUser || 'Akun Internal'}`,
+    );
+    const body = encodeURIComponent(
+      [
+        'Yth. Pengelola / Super Admin SI-TAMU BPBD Kabupaten Sidoarjo,',
+        '',
+        'Mohon bantuan reset kata sandi untuk akun internal berikut:',
+        `- NIP / Username : ${cleanUser || '(isi NIP/Username Anda)'}`,
+        `- Keterangan / Unit Kerja : ${cleanNote || '-'}`,
+        `- Waktu Pengajuan : ${waktuWib} WIB`,
+        '',
+        'Terima kasih.',
+      ].join('\n'),
+    );
+    return `mailto:${supportEmail}?subject=${subject}&body=${body}`;
+  };
 
   useEffect(() => {
     let active = true;
@@ -135,7 +179,10 @@ export function AdminLoginView({ onAuthenticated, onBackToPublic }: AdminLoginVi
     e.preventDefault();
     setError('');
     setSuccessNotice('');
-    if (!/^[a-zA-Z0-9._-]{3,60}$/.test(username.trim())) {
+    setSubmittedResetInfo(null);
+    const trimmedUsername = username.trim();
+    const trimmedNote = resetNote.trim();
+    if (!/^[a-zA-Z0-9._-]{3,60}$/.test(trimmedUsername)) {
       setError('NIP / Username wajib diisi (minimal 3 karakter).');
       return;
     }
@@ -146,8 +193,8 @@ export function AdminLoginView({ onAuthenticated, onBackToPublic }: AdminLoginVi
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          username: username.trim(),
-          note: resetNote.trim(),
+          username: trimmedUsername,
+          note: trimmedNote,
         }),
       });
       const data = await res.json();
@@ -155,6 +202,11 @@ export function AdminLoginView({ onAuthenticated, onBackToPublic }: AdminLoginVi
         setError(data.error || 'Gagal mengirim permintaan reset kata sandi.');
         return;
       }
+      setSubmittedResetInfo({
+        username: trimmedUsername,
+        note: trimmedNote,
+        emailSent: Boolean(data.emailSent),
+      });
       setResetNote('');
       setSuccessNotice(data.message);
     } catch {
@@ -220,7 +272,7 @@ export function AdminLoginView({ onAuthenticated, onBackToPublic }: AdminLoginVi
   const isBootstrapMode = authStatus && !authStatus.configured;
 
   return (
-    <main className="max-w-xl mx-auto px-4 sm:px-6 py-10 sm:py-12">
+    <main className="max-w-xl mx-auto px-4 sm:px-6 py-6 sm:py-12">
       <div className="bg-[#F4F7FC] border border-white/25 rounded-2xl overflow-hidden shadow-2xl">
         {/* Institutional Dual-Logo Header */}
         <div className="bg-gradient-to-r from-[#091D38] via-[#133663] to-[#091D38] px-6 py-6 text-white border-b-4 border-[#EA580C] flex items-center justify-between gap-4">
@@ -435,19 +487,31 @@ export function AdminLoginView({ onAuthenticated, onBackToPublic }: AdminLoginVi
               )}
 
               {successNotice && (
-                <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-sm text-emerald-800 space-y-2">
-                  <p>{successNotice}</p>
+                <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-sm text-emerald-900 space-y-2.5">
+                  <p className="leading-relaxed">{successNotice}</p>
                   {forgotTab === 'request' && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setForgotTab('reset');
-                        setSuccessNotice('');
-                      }}
-                      className="text-xs font-bold text-[#0F294A] underline hover:text-[#EA580C]"
-                    >
-                      Sudah menerima kode pemulihan? Masukkan di sini
-                    </button>
+                    <div className="flex flex-col sm:flex-row sm:items-center gap-2.5 pt-1">
+                      <a
+                        href={buildMailtoHref(
+                          submittedResetInfo?.username || username,
+                          submittedResetInfo?.note || resetNote,
+                        )}
+                        className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-[#0F294A] hover:bg-[#091B33] rounded-lg transition-colors"
+                      >
+                        <Mail className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                        <span>Kirim via Email ({supportEmail})</span>
+                      </a>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setForgotTab('reset');
+                          setSuccessNotice('');
+                        }}
+                        className="text-xs font-bold text-[#0F294A] underline hover:text-[#EA580C] text-left sm:text-center"
+                      >
+                        Sudah punya kode pemulihan? Masukkan di sini
+                      </button>
+                    </div>
                   )}
                 </div>
               )}
@@ -456,11 +520,23 @@ export function AdminLoginView({ onAuthenticated, onBackToPublic }: AdminLoginVi
                 <form onSubmit={handleRequestPasswordReset} className="space-y-4">
                   <div className="p-3.5 rounded-xl bg-blue-50 border border-blue-200 text-xs text-[#0F294A] leading-relaxed flex items-start gap-2.5">
                     <LifeBuoy className="w-4 h-4 text-[#EA580C] shrink-0 mt-0.5" aria-hidden="true" />
-                    <span>
-                      Kirim permintaan reset kata sandi ke <strong>Super Admin</strong>. Setelah
-                      disetujui, Super Admin akan memberikan kode pemulihan 1x pakai (berlaku 15
-                      menit) atau mengatur sandi baru untuk akun Anda.
-                    </span>
+                    <div className="space-y-1">
+                      <p>
+                        Kirim permintaan reset kata sandi ke <strong>Super Admin</strong> atau melalui
+                        email bantuan{' '}
+                        <a
+                          href={`mailto:${supportEmail}`}
+                          className="font-bold text-[#EA580C] underline break-all"
+                        >
+                          {supportEmail}
+                        </a>
+                        .
+                      </p>
+                      <p className="text-slate-600">
+                        Kode pemulihan 1x pakai berlaku selama 15 menit untuk mengatur sandi baru
+                        akun Anda.
+                      </p>
+                    </div>
                   </div>
 
                   <div>
@@ -514,6 +590,7 @@ export function AdminLoginView({ onAuthenticated, onBackToPublic }: AdminLoginVi
                         setViewMode('login');
                         setError('');
                         setSuccessNotice('');
+                        setSubmittedResetInfo(null);
                       }}
                       className="inline-flex items-center justify-center gap-1.5 px-4 py-3 min-h-[46px] text-sm font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-100 rounded-xl transition-colors"
                     >
@@ -521,6 +598,16 @@ export function AdminLoginView({ onAuthenticated, onBackToPublic }: AdminLoginVi
                       <span>Kembali Login</span>
                     </button>
                   </div>
+
+                  <a
+                    href={buildMailtoHref(username, resetNote)}
+                    className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 min-h-[42px] text-xs font-semibold text-[#0F294A] bg-white border border-slate-300 hover:bg-slate-100 rounded-xl transition-colors"
+                  >
+                    <Mail className="w-4 h-4 text-[#EA580C] shrink-0" aria-hidden="true" />
+                    <span className="truncate">
+                      Kirim Langsung via Email ({supportEmail})
+                    </span>
+                  </a>
                 </form>
               ) : (
                 <form onSubmit={handleCompletePasswordReset} className="space-y-4">
