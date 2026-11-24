@@ -1,6 +1,12 @@
 import crypto from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
-import { db, type UserRow } from './db.ts';
+import {
+  findUserById,
+  findUserByUsernameInsensitive,
+  getAdminConfigValue,
+  getUserCount,
+} from './store.ts';
+import { getSupabase, isSupabaseEnabled } from './supabase.ts';
 
 export type UserRole = 'super_admin' | 'resepsionis' | 'pimpinan';
 
@@ -56,12 +62,12 @@ export function verifyCheckoutToken(rawToken: string, storedHash: string): boole
   return crypto.timingSafeEqual(a, b);
 }
 
-export function getAdminCredentialState(): {
+export async function getAdminCredentialState(): Promise<{
   configured: boolean;
   source: 'env' | 'database' | 'unconfigured';
-} {
-  const userCount = db.prepare('SELECT COUNT(*) as total FROM users').get() as { total: number };
-  if ((userCount?.total ?? 0) > 0) {
+}> {
+  const userCount = await getUserCount();
+  if (userCount > 0) {
     return { configured: true, source: 'database' };
   }
 
@@ -70,29 +76,37 @@ export function getAdminCredentialState(): {
     return { configured: true, source: 'env' };
   }
 
-  const legacyRow = db
-    .prepare('SELECT value FROM admin_config WHERE key = ?')
-    .get('admin_password_hash') as { value: string } | undefined;
-
-  if (legacyRow && legacyRow.value) {
+  const legacyValue = await getAdminConfigValue('admin_password_hash');
+  if (legacyValue) {
     return { configured: true, source: 'database' };
   }
 
   return { configured: false, source: 'unconfigured' };
 }
 
-export function authenticateInternalUser(username: string, password: string): AuthUser | null {
+export async function authenticateInternalUser(
+  username: string,
+  password: string,
+): Promise<AuthUser | null> {
   const normalizedUsername = username.trim().toLowerCase();
   if (!normalizedUsername || !password) return null;
 
   // Check database users table first
-  const userRow = db
-    .prepare('SELECT * FROM users WHERE LOWER(username) = ?')
-    .get(normalizedUsername) as unknown as UserRow | undefined;
+  const userRow = await findUserByUsernameInsensitive(normalizedUsername);
 
   if (userRow) {
     if (userRow.is_active !== 1) return null;
-    if (!verifyPasswordScrypt(password, userRow.password_hash)) return null;
+    let passwordValid = false;
+    if (userRow.password_hash.startsWith('$2') && isSupabaseEnabled()) {
+      const { data, error } = await getSupabase().rpc('verify_user_bcrypt', {
+        p_user_id: userRow.id,
+        p_password: password,
+      });
+      passwordValid = !error && Boolean(data);
+    } else {
+      passwordValid = verifyPasswordScrypt(password, userRow.password_hash);
+    }
+    if (!passwordValid) return null;
     return {
       id: userRow.id,
       username: userRow.username,
@@ -119,10 +133,8 @@ export function authenticateInternalUser(username: string, password: string): Au
       }
     }
 
-    const legacyRow = db
-      .prepare('SELECT value FROM admin_config WHERE key = ?')
-      .get('admin_password_hash') as { value: string } | undefined;
-    if (legacyRow && legacyRow.value && verifyPasswordScrypt(password, legacyRow.value)) {
+    const legacyValue = await getAdminConfigValue('admin_password_hash');
+    if (legacyValue && verifyPasswordScrypt(password, legacyValue)) {
       return {
         id: 'legacy-super-admin',
         username: 'admin',
@@ -163,7 +175,7 @@ export function issueUserToken(user: AuthUser): string {
   return `${payloadB64}.${sig}`;
 }
 
-export function verifyUserToken(token: string): AuthUser | null {
+export async function verifyUserToken(token: string): Promise<AuthUser | null> {
   if (!token || typeof token !== 'string') return null;
   const parts = token.split('.');
   if (parts.length !== 2) return null;
@@ -207,10 +219,8 @@ export function verifyUserToken(token: string): AuthUser | null {
       };
     }
 
-    // Re-read authoritative user role & active state from SQLite
-    const userRow = db
-      .prepare('SELECT * FROM users WHERE id = ?')
-      .get(parsed.sub) as unknown as UserRow | undefined;
+    // Re-read authoritative user role & active state from active database
+    const userRow = await findUserById(parsed.sub);
 
     if (!userRow || userRow.is_active !== 1) {
       return null;
@@ -247,15 +257,20 @@ export function extractBearerToken(req: Request): string | null {
   return authHeader.slice(7).trim() || null;
 }
 
-export function requireAuth(req: Request, res: Response, next: NextFunction): void {
-  const token = extractBearerToken(req);
-  const authUser = token ? verifyUserToken(token) : null;
-  if (!authUser) {
-    res.status(401).json({ error: 'Sesi login tidak valid atau telah berakhir. Silakan masuk kembali.' });
-    return;
+export async function requireAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const token = extractBearerToken(req);
+    const authUser = token ? await verifyUserToken(token) : null;
+    if (!authUser) {
+      res.status(401).json({ error: 'Sesi login tidak valid atau telah berakhir. Silakan masuk kembali.' });
+      return;
+    }
+    req.authUser = authUser;
+    next();
+  } catch (err) {
+    console.error('Auth verification error:', err);
+    res.status(500).json({ error: 'Gagal memverifikasi sesi autentikasi.' });
   }
-  req.authUser = authUser;
-  next();
 }
 
 export function requireRole(...allowedRoles: UserRole[]) {

@@ -4,10 +4,10 @@ import {
   DEPARTMENTS,
   VISITOR_CATEGORIES,
   type Department,
-  type DepartmentRecord,
   type VisitRecord,
   type VisitorCategory,
 } from '../types';
+import { fetchPublicDepartments, submitPublicVisit } from '../lib/api';
 import { BpbdEmblem, SidoarjoLogo } from './BpbdEmblem';
 import { SignatureCanvas } from './SignatureCanvas';
 import { VisitReceiptCard } from './VisitReceiptCard';
@@ -49,11 +49,10 @@ export function PublicGuestPage({
 
   useEffect(() => {
     let active = true;
-    fetch('/api/departments')
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data: { departments?: DepartmentRecord[] } | null) => {
-        if (!active || !data?.departments?.length) return;
-        const names = data.departments.map((d) => d.name);
+    fetchPublicDepartments()
+      .then((depts) => {
+        if (!active || !depts.length) return;
+        const names = depts.map((d) => d.name);
         setAvailableDepartments(names);
         setDepartment((prev) => (names.includes(prev) ? prev : names[0]));
       })
@@ -100,24 +99,15 @@ export function PublicGuestPage({
 
     setSubmitting(true);
     try {
-      const response = await fetch('/api/visits', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fullName: fullName.trim(),
-          phone: phone.trim(),
-          visitorCategory,
-          institutionAddress: institutionAddress.trim(),
-          department,
-          purpose: purpose.trim(),
-          signatureData,
-        }),
+      const data = await submitPublicVisit({
+        fullName: fullName.trim(),
+        phone: phone.trim(),
+        visitorCategory,
+        institutionAddress: institutionAddress.trim(),
+        department,
+        purpose: purpose.trim(),
+        signatureData,
       });
-      const data = await response.json();
-      if (!response.ok) {
-        setSubmitError(data.error || 'Terjadi kesalahan saat menyimpan data kunjungan.');
-        return;
-      }
 
       setFullName('');
       setPhone('');
@@ -130,8 +120,12 @@ export function PublicGuestPage({
       setErrors({});
 
       onReceiptCreated(data.visit, data.checkoutToken);
-    } catch {
-      setSubmitError('Gagal terhubung ke server. Periksa koneksi jaringan Anda.');
+    } catch (err) {
+      setSubmitError(
+        err instanceof Error
+          ? err.message
+          : 'Gagal terhubung ke server. Periksa koneksi jaringan Anda.',
+      );
     } finally {
       setSubmitting(false);
     }

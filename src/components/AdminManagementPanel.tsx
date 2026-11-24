@@ -10,6 +10,19 @@ import {
   type PasswordResetRequestRecord,
   type UserRole,
 } from '../types';
+import {
+  ApiError,
+  createAdminDepartment,
+  createAdminUser,
+  dismissPasswordResetRequest,
+  fetchAdminDepartments,
+  fetchAdminUsers,
+  fetchAuditLogs,
+  fetchPasswordResetRequests,
+  issuePasswordResetToken,
+  updateAdminDepartment,
+  updateAdminUser,
+} from '../lib/api';
 import { formatShortDate, formatWibTime } from '../lib/format';
 
 interface AdminManagementPanelProps {
@@ -61,58 +74,30 @@ export function AdminManagementPanel({
     setLoading(true);
     setError('');
     try {
-      const headers = { Authorization: `Bearer ${token}` };
-
       if (mode === 'departments' || mode === 'users') {
-        const deptRes = await fetch('/api/admin/departments', { headers });
-        if (deptRes.status === 401) {
-          onSessionExpired();
-          return;
-        }
-        const deptData = await deptRes.json();
-        if (!deptRes.ok) {
-          setError(deptData.error || 'Gagal memuat master bidang.');
-          return;
-        }
-        setDepartments(deptData.departments || []);
+        const depts = await fetchAdminDepartments(token);
+        setDepartments(depts);
       }
 
       if (mode === 'users') {
-        const [userRes, resetRes] = await Promise.all([
-          fetch('/api/admin/users', { headers }),
-          fetch('/api/admin/password-reset-requests', { headers }),
+        const [usersList, requestsList] = await Promise.all([
+          fetchAdminUsers(token),
+          fetchPasswordResetRequests(token),
         ]);
-        if (userRes.status === 401 || resetRes.status === 401) {
-          onSessionExpired();
-          return;
-        }
-        const userData = await userRes.json();
-        if (!userRes.ok) {
-          setError(userData.error || 'Gagal memuat daftar akun pengguna.');
-          return;
-        }
-        setUsers(userData.users || []);
-        if (resetRes.ok) {
-          const resetData = await resetRes.json();
-          setResetRequests(resetData.requests || []);
-        }
+        setUsers(usersList);
+        setResetRequests(requestsList);
       }
 
       if (mode === 'audit') {
-        const logRes = await fetch('/api/admin/audit-logs', { headers });
-        if (logRes.status === 401) {
-          onSessionExpired();
-          return;
-        }
-        const logData = await logRes.json();
-        if (!logRes.ok) {
-          setError(logData.error || 'Gagal memuat log audit.');
-          return;
-        }
-        setAuditLogs(logData.logs || []);
+        const logsList = await fetchAuditLogs(token);
+        setAuditLogs(logsList);
       }
-    } catch {
-      setError('Gagal terhubung ke server.');
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        onSessionExpired();
+        return;
+      }
+      setError(err instanceof Error ? err.message : 'Gagal terhubung ke server.');
     } finally {
       setLoading(false);
     }
@@ -132,29 +117,17 @@ export function AdminManagementPanel({
     }
     setSavingDept(true);
     try {
-      const res = await fetch('/api/admin/departments', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ name: newDeptName.trim() }),
-      });
-      if (res.status === 401) {
+      const dept = await createAdminDepartment(token, newDeptName.trim());
+      setNewDeptName('');
+      setNotice(`Bidang "${dept.name}" berhasil ditambahkan.`);
+      onDepartmentsUpdated();
+      await loadData();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
         onSessionExpired();
         return;
       }
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || 'Gagal menambahkan bidang.');
-        return;
-      }
-      setNewDeptName('');
-      setNotice(`Bidang "${data.department.name}" berhasil ditambahkan.`);
-      onDepartmentsUpdated();
-      await loadData();
-    } catch {
-      setError('Gagal terhubung ke server.');
+      setError(err instanceof Error ? err.message : 'Gagal menambahkan bidang.');
     } finally {
       setSavingDept(false);
     }
@@ -164,27 +137,15 @@ export function AdminManagementPanel({
     setError('');
     setNotice('');
     try {
-      const res = await fetch(`/api/admin/departments/${encodeURIComponent(dept.id)}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ isActive: !dept.isActive }),
-      });
-      if (res.status === 401) {
+      await updateAdminDepartment(token, dept.id, { isActive: !dept.isActive });
+      onDepartmentsUpdated();
+      await loadData();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
         onSessionExpired();
         return;
       }
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || 'Gagal memperbarui status bidang.');
-        return;
-      }
-      onDepartmentsUpdated();
-      await loadData();
-    } catch {
-      setError('Gagal terhubung ke server.');
+      setError(err instanceof Error ? err.message : 'Gagal memperbarui status bidang.');
     }
   };
 
@@ -208,38 +169,26 @@ export function AdminManagementPanel({
 
     setSavingUser(true);
     try {
-      const res = await fetch('/api/admin/users', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          username: newUsername.trim(),
-          fullName: newFullName.trim(),
-          role: newRole,
-          department: newRole === 'pimpinan' ? newUserDept : 'Semua Bidang',
-          password: newUserPassword,
-        }),
+      const created = await createAdminUser(token, {
+        username: newUsername.trim(),
+        fullName: newFullName.trim(),
+        role: newRole,
+        department: newRole === 'pimpinan' ? newUserDept : 'Semua Bidang',
+        password: newUserPassword,
       });
-      if (res.status === 401) {
-        onSessionExpired();
-        return;
-      }
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || 'Gagal membuat akun pengguna.');
-        return;
-      }
       setNewUsername('');
       setNewFullName('');
       setNewRole('resepsionis');
       setNewUserDept('Semua Bidang');
       setNewUserPassword('');
-      setNotice(`Akun "${data.user.username}" (${ROLE_LABELS[data.user.role as UserRole]}) berhasil dibuat.`);
+      setNotice(`Akun "${created.username}" (${ROLE_LABELS[created.role]}) berhasil dibuat.`);
       await loadData();
-    } catch {
-      setError('Gagal terhubung ke server.');
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        onSessionExpired();
+        return;
+      }
+      setError(err instanceof Error ? err.message : 'Gagal membuat akun pengguna.');
     } finally {
       setSavingUser(false);
     }
@@ -249,26 +198,14 @@ export function AdminManagementPanel({
     setError('');
     setNotice('');
     try {
-      const res = await fetch(`/api/admin/users/${encodeURIComponent(u.id)}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ isActive: !u.isActive }),
-      });
-      if (res.status === 401) {
+      await updateAdminUser(token, u.id, { isActive: !u.isActive });
+      await loadData();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
         onSessionExpired();
         return;
       }
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || 'Gagal mengubah status akun.');
-        return;
-      }
-      await loadData();
-    } catch {
-      setError('Gagal terhubung ke server.');
+      setError(err instanceof Error ? err.message : 'Gagal mengubah status akun.');
     }
   };
 
@@ -280,29 +217,17 @@ export function AdminManagementPanel({
       return;
     }
     try {
-      const res = await fetch(`/api/admin/users/${encodeURIComponent(userId)}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ newPassword: resetPasswordValue }),
-      });
-      if (res.status === 401) {
+      const updated = await updateAdminUser(token, userId, { newPassword: resetPasswordValue });
+      setResetTargetId(null);
+      setResetPasswordValue('');
+      setNotice(`Kata sandi akun "${updated.username}" berhasil diperbarui.`);
+      await loadData();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
         onSessionExpired();
         return;
       }
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || 'Gagal mereset kata sandi.');
-        return;
-      }
-      setResetTargetId(null);
-      setResetPasswordValue('');
-      setNotice(`Kata sandi akun "${data.user.username}" berhasil diperbarui.`);
-      await loadData();
-    } catch {
-      setError('Gagal terhubung ke server.');
+      setError(err instanceof Error ? err.message : 'Gagal mereset kata sandi.');
     }
   };
 
@@ -310,22 +235,7 @@ export function AdminManagementPanel({
     setError('');
     setNotice('');
     try {
-      const res = await fetch(
-        `/api/admin/password-reset-requests/${encodeURIComponent(reqItem.id)}/issue-token`,
-        {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${token}` },
-        },
-      );
-      if (res.status === 401) {
-        onSessionExpired();
-        return;
-      }
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || 'Gagal membuat kode pemulihan.');
-        return;
-      }
+      const data = await issuePasswordResetToken(token, reqItem.id);
       setIssuedCodeInfo({
         requestId: reqItem.id,
         username: reqItem.username,
@@ -335,36 +245,29 @@ export function AdminManagementPanel({
         `Kode pemulihan 1x pakai untuk "${reqItem.username}" berhasil dibuat (berlaku 15 menit).`,
       );
       await loadData();
-    } catch {
-      setError('Gagal terhubung ke server.');
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        onSessionExpired();
+        return;
+      }
+      setError(err instanceof Error ? err.message : 'Gagal membuat kode pemulihan.');
     }
   };
 
   const handleDismissResetRequest = async (reqItem: PasswordResetRequestRecord) => {
     setError('');
     try {
-      const res = await fetch(
-        `/api/admin/password-reset-requests/${encodeURIComponent(reqItem.id)}/dismiss`,
-        {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${token}` },
-        },
-      );
-      if (res.status === 401) {
-        onSessionExpired();
-        return;
-      }
-      if (!res.ok) {
-        const data = await res.json();
-        setError(data.error || 'Gagal menutup permintaan reset.');
-        return;
-      }
+      await dismissPasswordResetRequest(token, reqItem.id);
       if (issuedCodeInfo?.requestId === reqItem.id) {
         setIssuedCodeInfo(null);
       }
       await loadData();
-    } catch {
-      setError('Gagal terhubung ke server.');
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        onSessionExpired();
+        return;
+      }
+      setError(err instanceof Error ? err.message : 'Gagal menutup permintaan reset.');
     }
   };
 

@@ -29,10 +29,17 @@ import {
   VISIT_STATUSES,
   type AuthUser,
   type DashboardStats,
-  type DepartmentRecord,
   type VisitRecord,
   type VisitStatus,
 } from '../types';
+import {
+  ApiError,
+  deleteVisitRecord,
+  exportVisitsCsvBlob,
+  fetchDashboardData,
+  fetchPublicDepartments,
+  updateVisitStatus,
+} from '../lib/api';
 import {
   formatIndonesianDate,
   formatShortDate,
@@ -133,11 +140,9 @@ export function AdminDashboard({
 
   const loadDepartments = useCallback(async () => {
     try {
-      const res = await fetch('/api/departments');
-      if (!res.ok) return;
-      const data = (await res.json()) as { departments?: DepartmentRecord[] };
-      if (data.departments?.length) {
-        setAvailableDepartments(data.departments.map((d) => d.name));
+      const depts = await fetchPublicDepartments();
+      if (depts.length) {
+        setAvailableDepartments(depts.map((d) => d.name));
       }
     } catch {
       // fallback to default list
@@ -148,43 +153,33 @@ export function AdminDashboard({
     loadDepartments();
   }, [loadDepartments]);
 
-  const buildQueryString = useCallback(() => {
-    const params = new URLSearchParams();
-    if (search.trim()) params.set('search', search.trim());
-    if (departmentFilter) params.set('department', departmentFilter);
-    if (statusFilter) params.set('status', statusFilter);
-    if (dateFrom) params.set('dateFrom', dateFrom);
-    if (dateTo) params.set('dateTo', dateTo);
-    return params.toString();
-  }, [search, departmentFilter, statusFilter, dateFrom, dateTo]);
-
   const fetchDashboard = useCallback(async () => {
     setError('');
     setLoading(true);
     try {
-      const qs = buildQueryString();
-      const res = await fetch(`/api/admin/dashboard${qs ? `?${qs}` : ''}`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+      const data = await fetchDashboardData(token, {
+        search: search.trim(),
+        department: departmentFilter,
+        status: statusFilter,
+        dateFrom,
+        dateTo,
       });
-      if (res.status === 401) {
+      setStats(data.stats);
+      setVisits(data.visits);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
         onSessionExpired();
         return;
       }
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || 'Gagal memuat data dashboard.');
-        return;
-      }
-      setStats(data.stats);
-      setVisits(data.visits);
-    } catch {
-      setError('Gagal terhubung ke server untuk memuat data tamu.');
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Gagal terhubung ke server untuk memuat data tamu.',
+      );
     } finally {
       setLoading(false);
     }
-  }, [buildQueryString, token, onSessionExpired]);
+  }, [search, departmentFilter, statusFilter, dateFrom, dateTo, token, onSessionExpired]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -230,26 +225,14 @@ export function AdminDashboard({
     setUpdatingId(visit.id);
     setError('');
     try {
-      const res = await fetch(`/api/admin/visits/${encodeURIComponent(visit.id)}/status`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ status: nextStatus }),
-      });
-      if (res.status === 401) {
+      await updateVisitStatus(token, visit.id, nextStatus);
+      await fetchDashboard();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
         onSessionExpired();
         return;
       }
-      if (!res.ok) {
-        const data = await res.json();
-        setError(data.error || 'Gagal memperbarui status kunjungan.');
-        return;
-      }
-      await fetchDashboard();
-    } catch {
-      setError('Gagal terhubung ke server saat memperbarui status.');
+      setError(err instanceof Error ? err.message : 'Gagal memperbarui status kunjungan.');
     } finally {
       setUpdatingId(null);
     }
@@ -260,25 +243,15 @@ export function AdminDashboard({
     setUpdatingId(visitId);
     setError('');
     try {
-      const res = await fetch(`/api/admin/visits/${encodeURIComponent(visitId)}`, {
-        method: 'DELETE',
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
-      if (res.status === 401) {
+      await deleteVisitRecord(token, visitId);
+      setConfirmDeleteId(null);
+      await fetchDashboard();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
         onSessionExpired();
         return;
       }
-      if (!res.ok) {
-        const data = await res.json();
-        setError(data.error || 'Gagal menghapus data kunjungan.');
-        return;
-      }
-      setConfirmDeleteId(null);
-      await fetchDashboard();
-    } catch {
-      setError('Gagal terhubung ke server saat menghapus data.');
+      setError(err instanceof Error ? err.message : 'Gagal menghapus data kunjungan.');
     } finally {
       setUpdatingId(null);
     }
@@ -289,29 +262,25 @@ export function AdminDashboard({
     setExportingCsv(true);
     setError('');
     try {
-      const qs = buildQueryString();
-      const res = await fetch(`/api/admin/export${qs ? `?${qs}` : ''}`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+      const { blob, filename } = await exportVisitsCsvBlob(token, {
+        search: search.trim(),
+        department: departmentFilter,
+        status: statusFilter,
+        dateFrom,
+        dateTo,
       });
-      if (res.status === 401) {
-        onSessionExpired();
-        return;
-      }
-      if (!res.ok) {
-        setError('Gagal mengunduh file Excel (CSV).');
-        return;
-      }
-      const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `laporan-buku-tamu-bpbd-sidoarjo-${getTodayWib()}.csv`;
+      link.download = filename;
       link.click();
       URL.revokeObjectURL(url);
-    } catch {
-      setError('Gagal terhubung ke server saat ekspor CSV.');
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        onSessionExpired();
+        return;
+      }
+      setError(err instanceof Error ? err.message : 'Gagal mengunduh file Excel (CSV).');
     } finally {
       setExportingCsv(false);
     }

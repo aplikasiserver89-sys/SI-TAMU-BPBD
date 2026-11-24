@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import { Send, UserPlus, X } from 'lucide-react';
 import { VISITOR_CATEGORIES, type VisitorCategory } from '../types';
+import { ApiError, createManualVisit } from '../lib/api';
 import { SignatureCanvas } from './SignatureCanvas';
 
 interface ManualVisitModalProps {
@@ -59,36 +60,24 @@ export function ManualVisitModal({
 
     setSubmitting(true);
     try {
-      const res = await fetch('/api/admin/manual-visit', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          fullName: fullName.trim(),
-          phone: phone.trim(),
-          visitorCategory,
-          institutionAddress: institutionAddress.trim(),
-          department,
-          purpose: purpose.trim(),
-          signatureData,
-        }),
+      await createManualVisit(token, {
+        fullName: fullName.trim(),
+        phone: phone.trim(),
+        visitorCategory,
+        institutionAddress: institutionAddress.trim(),
+        department,
+        purpose: purpose.trim(),
+        signatureData,
       });
-      if (res.status === 401) {
-        onSessionExpired();
-        return;
-      }
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || 'Gagal menyimpan input manual tamu.');
-        return;
-      }
       setResetSignal((s) => s + 1);
       onCreated();
       onClose();
-    } catch {
-      setError('Gagal terhubung ke server.');
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        onSessionExpired();
+        return;
+      }
+      setError(err instanceof Error ? err.message : 'Gagal menyimpan input manual tamu.');
     } finally {
       setSubmitting(false);
     }

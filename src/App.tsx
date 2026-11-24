@@ -4,6 +4,7 @@ import { TopBar, type AppView } from './components/TopBar';
 import { PublicGuestPage } from './components/PublicGuestPage';
 import { AdminLoginView } from './components/AdminLoginView';
 import { AdminDashboard } from './components/AdminDashboard';
+import { ApiError, fetchVisitReceipt, logoutInternalUser } from './lib/api';
 
 const RECEIPT_STORAGE_KEY = 'sitamu_bpbd_active_receipt';
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes inactivity auto-logout
@@ -48,30 +49,23 @@ export default function App() {
       const parsed = JSON.parse(raw) as StoredReceiptRef;
       if (!parsed.visitId || !parsed.checkoutToken) return;
 
-      fetch(`/api/visits/${encodeURIComponent(parsed.visitId)}/receipt`, {
-        headers: {
-          'X-Checkout-Token': parsed.checkoutToken,
-        },
-      })
-        .then(async (res) => {
-          if (!res.ok) {
+      fetchVisitReceipt(parsed.visitId, parsed.checkoutToken)
+        .then((visit) => {
+          if (visit.status === 'Selesai' || isFreshQrScan) {
             sessionStorage.removeItem(RECEIPT_STORAGE_KEY);
             return;
           }
-          const data = await res.json();
-          if (data.visit?.status === 'Selesai' || isFreshQrScan) {
-            sessionStorage.removeItem(RECEIPT_STORAGE_KEY);
-            return;
-          }
-          if (active && data.visit) {
+          if (active && visit) {
             setActiveReceipt({
-              visit: data.visit,
+              visit,
               checkoutToken: parsed.checkoutToken,
             });
           }
         })
-        .catch(() => {
-          // ignore network error on initial receipt restore
+        .catch((err) => {
+          if (err instanceof ApiError && (err.status === 401 || err.status === 404)) {
+            sessionStorage.removeItem(RECEIPT_STORAGE_KEY);
+          }
         });
     } catch {
       sessionStorage.removeItem(RECEIPT_STORAGE_KEY);
@@ -85,10 +79,7 @@ export default function App() {
   const handleLogout = useCallback(async () => {
     if (authSession?.token) {
       try {
-        await fetch('/api/admin/logout', {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${authSession.token}` },
-        });
+        await logoutInternalUser(authSession.token);
       } catch {
         // ignore network error on logout
       }

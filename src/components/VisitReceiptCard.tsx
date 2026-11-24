@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { CheckCircle2, Clock, Printer, RotateCcw } from 'lucide-react';
 import type { VisitRecord } from '../types';
+import { checkoutPublicVisit } from '../lib/api';
 import { formatIndonesianDate, formatWibTime } from '../lib/format';
 import { downloadVisitReceiptPdf } from '../lib/pdfGenerator';
 import { BpbdEmblem, SidoarjoLogo } from './BpbdEmblem';
@@ -43,21 +44,14 @@ export function VisitReceiptCard({
     setError('');
     setSubmitting(true);
     try {
-      const response = await fetch(`/api/visits/${encodeURIComponent(visit.id)}/checkout`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Checkout-Token': checkoutToken,
-        },
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        setError(data.error || 'Gagal memproses check-out.');
-        return;
-      }
-      onCheckedOut(data.visit);
-    } catch {
-      setError('Tidak dapat terhubung ke server. Periksa koneksi internet Anda.');
+      const updatedVisit = await checkoutPublicVisit(visit.id, checkoutToken);
+      onCheckedOut(updatedVisit);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Tidak dapat terhubung ke server. Periksa koneksi internet Anda.',
+      );
     } finally {
       setSubmitting(false);
     }

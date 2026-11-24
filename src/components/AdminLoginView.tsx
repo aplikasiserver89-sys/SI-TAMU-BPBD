@@ -12,6 +12,13 @@ import {
   UserCheck,
 } from 'lucide-react';
 import type { AdminAuthStatus, AuthUser } from '../types';
+import {
+  bootstrapSuperAdminAccount,
+  completePasswordReset,
+  fetchAuthStatus,
+  loginInternalUser,
+  requestPasswordReset,
+} from '../lib/api';
 import { BpbdEmblem, SidoarjoLogo } from './BpbdEmblem';
 
 interface AdminLoginViewProps {
@@ -80,14 +87,15 @@ export function AdminLoginView({ onAuthenticated, onBackToPublic }: AdminLoginVi
     let active = true;
     const loadStatus = async () => {
       try {
-        const res = await fetch('/api/admin/auth-status');
-        const data = (await res.json()) as AdminAuthStatus;
+        const data = await fetchAuthStatus();
         if (active) {
           setAuthStatus(data);
         }
-      } catch {
+      } catch (err) {
         if (active) {
-          setError('Gagal memeriksa status autentikasi server.');
+          setError(
+            err instanceof Error ? err.message : 'Gagal memeriksa status autentikasi server.',
+          );
         }
       } finally {
         if (active) {
@@ -124,23 +132,14 @@ export function AdminLoginView({ onAuthenticated, onBackToPublic }: AdminLoginVi
 
     setSubmitting(true);
     try {
-      const res = await fetch('/api/admin/bootstrap', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          username: username.trim(),
-          fullName: fullName.trim(),
-          password,
-        }),
+      const data = await bootstrapSuperAdminAccount({
+        username: username.trim(),
+        fullName: fullName.trim(),
+        password,
       });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || 'Gagal mengaktivasi akun Super Admin.');
-        return;
-      }
       onAuthenticated(data.token, data.user);
-    } catch {
-      setError('Gagal terhubung ke server.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Gagal mengaktivasi akun Super Admin.');
     } finally {
       setSubmitting(false);
     }
@@ -157,19 +156,13 @@ export function AdminLoginView({ onAuthenticated, onBackToPublic }: AdminLoginVi
 
     setSubmitting(true);
     try {
-      const res = await fetch('/api/admin/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: username.trim(), password }),
+      const data = await loginInternalUser({
+        username: username.trim(),
+        password,
       });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || 'NIP / Username atau kata sandi salah.');
-        return;
-      }
       onAuthenticated(data.token, data.user);
-    } catch {
-      setError('Gagal terhubung ke server.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'NIP / Username atau kata sandi salah.');
     } finally {
       setSubmitting(false);
     }
@@ -189,19 +182,10 @@ export function AdminLoginView({ onAuthenticated, onBackToPublic }: AdminLoginVi
 
     setSubmitting(true);
     try {
-      const res = await fetch('/api/admin/forgot-password', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          username: trimmedUsername,
-          note: trimmedNote,
-        }),
+      const data = await requestPasswordReset({
+        username: trimmedUsername,
+        note: trimmedNote,
       });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || 'Gagal mengirim permintaan reset kata sandi.');
-        return;
-      }
       setSubmittedResetInfo({
         username: trimmedUsername,
         note: trimmedNote,
@@ -209,8 +193,10 @@ export function AdminLoginView({ onAuthenticated, onBackToPublic }: AdminLoginVi
       });
       setResetNote('');
       setSuccessNotice(data.message);
-    } catch {
-      setError('Gagal terhubung ke server.');
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'Gagal mengirim permintaan reset kata sandi.',
+      );
     } finally {
       setSubmitting(false);
     }
@@ -240,20 +226,11 @@ export function AdminLoginView({ onAuthenticated, onBackToPublic }: AdminLoginVi
 
     setSubmitting(true);
     try {
-      const res = await fetch('/api/admin/reset-password', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          username: username.trim(),
-          recoveryCode: recoveryCode.trim(),
-          newPassword: newResetPassword,
-        }),
+      const data = await completePasswordReset({
+        username: username.trim(),
+        recoveryCode: recoveryCode.trim(),
+        newPassword: newResetPassword,
       });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || 'Gagal memperbarui kata sandi.');
-        return;
-      }
       setRecoveryCode('');
       setNewResetPassword('');
       setConfirmResetPassword('');
@@ -262,8 +239,8 @@ export function AdminLoginView({ onAuthenticated, onBackToPublic }: AdminLoginVi
       setSuccessNotice(
         data.message || 'Kata sandi berhasil diperbarui. Silakan masuk dengan sandi baru.',
       );
-    } catch {
-      setError('Gagal terhubung ke server.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Gagal memperbarui kata sandi.');
     } finally {
       setSubmitting(false);
     }
