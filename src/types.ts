@@ -134,3 +134,23 @@ export interface AdminAuthStatus {
   supportEmail?: string;
   smtpConfigured?: boolean;
 }
+
+export type BackupConflictMode = 'skip' | 'overwrite';
+
+export interface BackupDataBundle {
+  format: 'si-tamu-bpbd-backup';
+  version: number;
+  exportedAt: string;
+  exportedBy?: string;
+  departments: DepartmentRecord[];
+  visits: VisitRecord[];
+}
+
+export interface BackupImportResult {
+  departmentsAdded: number;
+  departmentsUpdated: number;
+  departmentsSkipped: number;
+  visitsAdded: number;
+  visitsUpdated: number;
+  visitsSkipped: number;
+}

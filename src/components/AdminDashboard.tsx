@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   ClipboardList,
   Clock,
+  Database,
   Download,
   Eye,
   FileSpreadsheet,
@@ -52,7 +53,7 @@ import { PrintPosterView, PrintReportView } from './PrintViews';
 import { ManualVisitModal } from './ManualVisitModal';
 import { AdminManagementPanel } from './AdminManagementPanel';
 
-type DashboardTab = 'records' | 'recap' | 'qr' | 'departments' | 'users' | 'audit';
+type DashboardTab = 'records' | 'recap' | 'qr' | 'departments' | 'users' | 'audit' | 'backup';
 type QuickPreset = 'all' | 'today' | 'week' | 'month' | 'year' | 'last_year';
 type BreakdownTab = 'department' | 'category';
 
@@ -421,6 +422,19 @@ export function AdminDashboard({
                   <ClipboardList className="w-4 h-4 shrink-0" aria-hidden="true" />
                   <span>Log Audit</span>
                 </button>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('backup')}
+                  className={`inline-flex items-center gap-2 px-3.5 py-2 min-h-[40px] text-xs sm:text-sm font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 ${
+                    activeTab === 'backup'
+                      ? 'bg-[#EA580C] text-white shadow-sm'
+                      : 'text-slate-200 hover:text-white'
+                  }`}
+                >
+                  <Database className="w-4 h-4 shrink-0" aria-hidden="true" />
+                  <span>Backup &amp; Import</span>
+                </button>
               </>
             )}
           </div>
@@ -731,13 +745,20 @@ export function AdminDashboard({
               </section>
             );
           })()
-        ) : (activeTab === 'departments' || activeTab === 'users' || activeTab === 'audit') &&
+        ) : (activeTab === 'departments' ||
+            activeTab === 'users' ||
+            activeTab === 'audit' ||
+            activeTab === 'backup') &&
           isSuperAdmin ? (
           <AdminManagementPanel
             token={token}
             currentUser={authUser}
             mode={activeTab}
             onDepartmentsUpdated={loadDepartments}
+            onDataRestored={() => {
+              loadDepartments();
+              fetchDashboard();
+            }}
             onSessionExpired={onSessionExpired}
           />
         ) : (

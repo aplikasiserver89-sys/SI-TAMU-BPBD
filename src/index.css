@@ -1,9 +1,9 @@
 @import "tailwindcss";
 
 @theme {
-  --font-display: Arial, Helvetica, sans-serif;
-  --font-sans: Arial, Helvetica, sans-serif;
-  --font-mono: Arial, Helvetica, sans-serif;
+  --font-display: 'Plus Jakarta Sans', 'Outfit', 'Poppins', 'Century Gothic', 'Futura', sans-serif;
+  --font-sans: 'Plus Jakarta Sans', 'Outfit', 'Poppins', 'Century Gothic', 'Futura', sans-serif;
+  --font-mono: 'Plus Jakarta Sans', 'Outfit', 'Poppins', 'Century Gothic', 'Futura', sans-serif;
   --color-bpbd-navy: #0F294A;
   --color-bpbd-navy-deep: #08172C;
   --color-bpbd-orange: #EA580C;
@@ -16,8 +16,10 @@
   button,
   input,
   select,
-  textarea {
-    font-family: Arial, Helvetica, sans-serif;
+  textarea,
+  code,
+  pre {
+    font-family: 'Plus Jakarta Sans', 'Outfit', 'Poppins', 'Century Gothic', 'Futura', sans-serif;
   }
 
   body {
@@ -26,7 +28,7 @@
   }
 
   h1, h2, h3, h4, .font-display {
-    font-family: Arial, Helvetica, sans-serif;
+    font-family: 'Outfit', 'Plus Jakarta Sans', 'Poppins', 'Century Gothic', 'Futura', sans-serif;
   }
 
   .tabular-nums {

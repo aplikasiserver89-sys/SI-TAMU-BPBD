@@ -1,15 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  AlertTriangle,
   Building2,
   Check,
+  CheckCircle2,
   Copy,
+  Database,
+  Download,
   Eye,
   EyeOff,
+  FileJson,
   KeyRound,
   LifeBuoy,
   Pencil,
   Plus,
   Shield,
+  Upload,
   UserPlus,
   X,
 } from 'lucide-react';
@@ -18,6 +24,9 @@ import {
   USER_ROLES,
   type AuditLogRecord,
   type AuthUser,
+  type BackupConflictMode,
+  type BackupDataBundle,
+  type BackupImportResult,
   type DepartmentRecord,
   type ManagedUser,
   type PasswordResetRequestRecord,
@@ -28,21 +37,24 @@ import {
   createAdminDepartment,
   createAdminUser,
   dismissPasswordResetRequest,
+  exportBackupBundle,
   fetchAdminDepartments,
   fetchAdminUsers,
   fetchAuditLogs,
   fetchPasswordResetRequests,
+  importBackupBundle,
   issuePasswordResetToken,
   updateAdminDepartment,
   updateAdminUser,
 } from '../lib/api';
-import { formatShortDate, formatWibTime } from '../lib/format';
+import { formatShortDate, formatWibTime, getTodayWib } from '../lib/format';
 
 interface AdminManagementPanelProps {
   token: string;
   currentUser: AuthUser;
-  mode: 'departments' | 'users' | 'audit';
+  mode: 'departments' | 'users' | 'audit' | 'backup';
   onDepartmentsUpdated: () => void;
+  onDataRestored?: () => void;
   onSessionExpired: () => void;
 }
 
@@ -51,6 +63,7 @@ export function AdminManagementPanel({
   currentUser,
   mode,
   onDepartmentsUpdated,
+  onDataRestored,
   onSessionExpired,
 }: AdminManagementPanelProps) {
   const [departments, setDepartments] = useState<DepartmentRecord[]>([]);
@@ -86,6 +99,15 @@ export function AdminManagementPanel({
   // Reset password inline
   const [resetTargetId, setResetTargetId] = useState<string | null>(null);
   const [resetPasswordValue, setResetPasswordValue] = useState('');
+
+  // Backup & Import state
+  const backupFileInputRef = useRef<HTMLInputElement>(null);
+  const [exportingBackup, setExportingBackup] = useState(false);
+  const [importingBackup, setImportingBackup] = useState(false);
+  const [selectedBackupFileName, setSelectedBackupFileName] = useState('');
+  const [parsedBackup, setParsedBackup] = useState<BackupDataBundle | null>(null);
+  const [conflictMode, setConflictMode] = useState<BackupConflictMode>('skip');
+  const [importSummary, setImportSummary] = useState<BackupImportResult | null>(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -332,6 +354,120 @@ export function AdminManagementPanel({
         return;
       }
       setError(err instanceof Error ? err.message : 'Gagal menutup permintaan reset.');
+    }
+  };
+
+  const handleDownloadBackup = async () => {
+    setError('');
+    setNotice('');
+    setExportingBackup(true);
+    try {
+      const bundle = await exportBackupBundle(token);
+      const jsonString = JSON.stringify(bundle, null, 2);
+      const blob = new Blob([jsonString], { type: 'application/json;charset=utf-8' });
+      const filename = `backup-si-tamu-bpbd-${getTodayWib()}.json`;
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.setTimeout(() => URL.revokeObjectURL(url), 1500);
+
+      setNotice(
+        `Backup berhasil diunduh (${bundle.departments.length} bidang tujuan dan ${bundle.visits.length} data kunjungan).`,
+      );
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        onSessionExpired();
+        return;
+      }
+      setError(err instanceof Error ? err.message : 'Gagal mengekspor file backup data.');
+    } finally {
+      setExportingBackup(false);
+    }
+  };
+
+  const handleSelectBackupFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    setError('');
+    setNotice('');
+    setImportSummary(null);
+    if (!file) return;
+
+    if (file.size > 14 * 1024 * 1024) {
+      setError('Ukuran file backup maksimal 14 MB.');
+      e.target.value = '';
+      return;
+    }
+
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text) as Partial<BackupDataBundle> | null;
+      if (
+        !parsed ||
+        typeof parsed !== 'object' ||
+        parsed.format !== 'si-tamu-bpbd-backup' ||
+        (!Array.isArray(parsed.departments) && !Array.isArray(parsed.visits))
+      ) {
+        setError(
+          'File tidak dikenali. Pastikan Anda memilih file .json hasil backup resmi SI-TAMU BPBD.',
+        );
+        setParsedBackup(null);
+        setSelectedBackupFileName('');
+        e.target.value = '';
+        return;
+      }
+
+      setParsedBackup({
+        format: 'si-tamu-bpbd-backup',
+        version: Number(parsed.version || 1),
+        exportedAt: parsed.exportedAt || '',
+        exportedBy: parsed.exportedBy,
+        departments: Array.isArray(parsed.departments) ? parsed.departments : [],
+        visits: Array.isArray(parsed.visits) ? parsed.visits : [],
+      });
+      setSelectedBackupFileName(file.name);
+    } catch {
+      setError('Gagal membaca file JSON. Pastikan file backup tidak rusak.');
+      setParsedBackup(null);
+      setSelectedBackupFileName('');
+      e.target.value = '';
+    }
+  };
+
+  const handleClearBackupFile = () => {
+    setParsedBackup(null);
+    setSelectedBackupFileName('');
+    setImportSummary(null);
+    if (backupFileInputRef.current) {
+      backupFileInputRef.current.value = '';
+    }
+  };
+
+  const handleRunImportBackup = async () => {
+    if (!parsedBackup) return;
+    setError('');
+    setNotice('');
+    setImportSummary(null);
+    setImportingBackup(true);
+    try {
+      const summary = await importBackupBundle(token, parsedBackup, conflictMode);
+      setImportSummary(summary);
+      setNotice(
+        `Import data selesai: ${summary.departmentsAdded} bidang ditambahkan, ${summary.visitsAdded} kunjungan ditambahkan, ${summary.visitsUpdated} kunjungan diperbarui.`,
+      );
+      onDepartmentsUpdated();
+      onDataRestored?.();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        onSessionExpired();
+        return;
+      }
+      setError(err instanceof Error ? err.message : 'Gagal mengimpor file backup data.');
+    } finally {
+      setImportingBackup(false);
     }
   };
 
@@ -919,6 +1055,218 @@ export function AdminManagementPanel({
                 )}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {mode === 'backup' && (
+        <div className="space-y-6">
+          <div className="bg-[#F8FAFC] border border-white/25 rounded-2xl overflow-hidden shadow-xl">
+            <div className="px-5 sm:px-6 py-4 sm:py-5 bg-gradient-to-r from-[#0F294A] to-[#1A4275] text-white flex items-center gap-3">
+              <Database className="w-5 h-5 text-[#FB923C] shrink-0" aria-hidden="true" />
+              <div>
+                <h2 className="font-display text-base font-bold">
+                  Backup &amp; Import Data Sistem
+                </h2>
+                <p className="text-xs text-slate-200">
+                  Simpan cadangan seluruh data kunjungan &amp; master bidang sebelum pembaruan
+                  aplikasi, atau pulihkan kembali kapan saja.
+                </p>
+              </div>
+            </div>
+
+            <div className="p-4 sm:p-6 grid grid-cols-1 lg:grid-cols-2 gap-6 bg-white">
+              {/* Card 1: Backup / Ekspor Data */}
+              <div className="border border-slate-200 rounded-2xl p-5 flex flex-col justify-between gap-5 bg-slate-50/70">
+                <div className="space-y-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-[#0F294A] text-white flex items-center justify-center shrink-0">
+                      <Download className="w-5 h-5" aria-hidden="true" />
+                    </div>
+                    <div>
+                      <h3 className="font-display text-base font-bold text-[#0F294A]">
+                        1. Backup Data (.json)
+                      </h3>
+                      <p className="text-xs text-slate-500">
+                        Unduh salinan lengkap database buku tamu ke perangkat Anda
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="p-3.5 rounded-xl bg-white border border-slate-200 text-xs text-slate-600 space-y-1.5 leading-relaxed">
+                    <p className="font-semibold text-slate-800">Isi file cadangan meliputi:</p>
+                    <p>• Seluruh riwayat kunjungan tamu (nomor urut, waktu WIB, instansi, status, dan tanda tangan digital).</p>
+                    <p>• Daftar Master Bidang Tujuan layanan yang aktif maupun nonaktif.</p>
+                    <p>• Aman: kata sandi akun internal tidak disertakan di dalam file backup.</p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  disabled={exportingBackup}
+                  onClick={handleDownloadBackup}
+                  className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 min-h-[46px] text-sm font-semibold text-white bg-[#0F294A] hover:bg-[#091B33] disabled:opacity-60 rounded-xl transition-colors"
+                >
+                  <Download className="w-4 h-4 shrink-0" aria-hidden="true" />
+                  <span>
+                    {exportingBackup ? 'Menyiapkan File Backup...' : 'Unduh File Backup (.json)'}
+                  </span>
+                </button>
+              </div>
+
+              {/* Card 2: Import / Pulihkan Data */}
+              <div className="border border-slate-200 rounded-2xl p-5 flex flex-col justify-between gap-5 bg-slate-50/70">
+                <div className="space-y-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-[#EA580C] text-white flex items-center justify-center shrink-0">
+                      <Upload className="w-5 h-5" aria-hidden="true" />
+                    </div>
+                    <div>
+                      <h3 className="font-display text-base font-bold text-[#0F294A]">
+                        2. Import / Pulihkan Data
+                      </h3>
+                      <p className="text-xs text-slate-500">
+                        Unggah file backup (.json) untuk memulihkan data setelah update
+                      </p>
+                    </div>
+                  </div>
+
+                  <div>
+                    <input
+                      ref={backupFileInputRef}
+                      id="backup-file-upload"
+                      type="file"
+                      accept="application/json,.json"
+                      onChange={handleSelectBackupFile}
+                      className="sr-only"
+                    />
+                    <label
+                      htmlFor="backup-file-upload"
+                      className="cursor-pointer flex flex-col items-center justify-center gap-2 p-5 rounded-xl border-2 border-dashed border-slate-300 hover:border-[#EA580C] bg-white text-center transition-colors"
+                    >
+                      <FileJson className="w-7 h-7 text-[#EA580C]" aria-hidden="true" />
+                      <span className="text-xs sm:text-sm font-semibold text-[#0F294A]">
+                        {selectedBackupFileName || 'Pilih File Backup (.json) dari Perangkat'}
+                      </span>
+                      <span className="text-[11px] text-slate-500">
+                        Format file: backup-si-tamu-bpbd-*.json (maks. 14 MB)
+                      </span>
+                    </label>
+                  </div>
+
+                  {parsedBackup && (
+                    <div className="p-4 rounded-xl bg-white border border-slate-200 space-y-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <p className="text-xs font-bold text-[#0F294A]">
+                            Pratinjau Isi File Backup
+                          </p>
+                          <p className="text-[11px] text-slate-500">
+                            {parsedBackup.exportedAt
+                              ? `Dibuat pada ${formatShortDate(parsedBackup.exportedAt)} · ${formatWibTime(parsedBackup.exportedAt)}`
+                              : 'File backup terverifikasi'}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleClearBackupFile}
+                          className="text-xs font-semibold text-slate-500 hover:text-red-600"
+                        >
+                          Ganti File
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2.5 text-center">
+                        <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
+                          <p className="text-[11px] text-slate-500">Bidang Tujuan</p>
+                          <p className="text-lg font-bold text-[#0F294A] tabular-nums">
+                            {parsedBackup.departments.length}
+                          </p>
+                        </div>
+                        <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
+                          <p className="text-[11px] text-slate-500">Data Kunjungan</p>
+                          <p className="text-lg font-bold text-[#EA580C] tabular-nums">
+                            {parsedBackup.visits.length}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="space-y-1.5 pt-1">
+                        <p className="text-xs font-semibold text-slate-800">
+                          Jika ada data dengan ID yang sama:
+                        </p>
+                        <label className="flex items-start gap-2 text-xs text-slate-700 cursor-pointer">
+                          <input
+                            type="radio"
+                            name="backup-conflict-mode"
+                            checked={conflictMode === 'skip'}
+                            onChange={() => setConflictMode('skip')}
+                            className="mt-0.5 accent-[#0F294A]"
+                          />
+                          <span>
+                            <strong>Lewati data yang sudah ada (Disarankan)</strong> — hanya
+                            menambahkan data yang belum tercatat.
+                          </span>
+                        </label>
+                        <label className="flex items-start gap-2 text-xs text-slate-700 cursor-pointer">
+                          <input
+                            type="radio"
+                            name="backup-conflict-mode"
+                            checked={conflictMode === 'overwrite'}
+                            onChange={() => setConflictMode('overwrite')}
+                            className="mt-0.5 accent-[#EA580C]"
+                          />
+                          <span>
+                            <strong>Perbarui / Timpa data dengan ID sama</strong> — cocok untuk
+                            memulihkan perubahan status &amp; bidang.
+                          </span>
+                        </label>
+                      </div>
+                    </div>
+                  )}
+
+                  {importSummary && (
+                    <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-900 space-y-1.5">
+                      <div className="flex items-center gap-1.5 font-bold">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" aria-hidden="true" />
+                        <span>Hasil Pemulihan Data:</span>
+                      </div>
+                      <p>
+                        • Bidang Tujuan: <strong>{importSummary.departmentsAdded}</strong>{' '}
+                        ditambahkan, <strong>{importSummary.departmentsUpdated}</strong>{' '}
+                        diperbarui, <strong>{importSummary.departmentsSkipped}</strong> dilewati.
+                      </p>
+                      <p>
+                        • Kunjungan Tamu: <strong>{importSummary.visitsAdded}</strong> ditambahkan,{' '}
+                        <strong>{importSummary.visitsUpdated}</strong> diperbarui,{' '}
+                        <strong>{importSummary.visitsSkipped}</strong> dilewati.
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-2.5">
+                  <div className="flex items-start gap-2 text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-xl p-2.5">
+                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-600" aria-hidden="true" />
+                    <span>
+                      Disarankan mengunduh backup terbaru terlebih dahulu sebelum melakukan import
+                      data dari file lama.
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={!parsedBackup || importingBackup}
+                    onClick={handleRunImportBackup}
+                    className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 min-h-[46px] text-sm font-semibold text-white bg-[#EA580C] hover:bg-[#C2410C] disabled:opacity-50 rounded-xl transition-colors"
+                  >
+                    <Upload className="w-4 h-4 shrink-0" aria-hidden="true" />
+                    <span>
+                      {importingBackup ? 'Mengimpor Data...' : 'Mulai Import / Pulihkan Data'}
+                    </span>
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       )}

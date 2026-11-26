@@ -1338,3 +1338,395 @@ export async function listAuditLogs(limit = 200): Promise<AuditLogRow[]> {
     .prepare('SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT ?')
     .all(limit) as unknown as AuditLogRow[];
 }
+
+// ============================================================================
+// Backup & Import Data Repository
+// ============================================================================
+
+export interface BackupImportDepartmentInput {
+  id: string;
+  name: string;
+  isActive: boolean;
+  sortOrder: number;
+}
+
+export interface BackupImportVisitInput {
+  id: string;
+  queueNumber: number;
+  queueCode: string;
+  visitDate: string;
+  fullName: string;
+  phone: string;
+  visitorCategory: string;
+  institutionAddress: string;
+  department: string;
+  purpose: string;
+  signatureData: string;
+  status: 'Sedang Berkunjung' | 'Selesai';
+  checkInAt: string;
+  checkOutAt: string | null;
+}
+
+export interface BackupImportSummary {
+  departmentsAdded: number;
+  departmentsUpdated: number;
+  departmentsSkipped: number;
+  visitsAdded: number;
+  visitsUpdated: number;
+  visitsSkipped: number;
+}
+
+export async function exportBackupBundle(): Promise<{
+  departments: DepartmentRow[];
+  visits: VisitRow[];
+}> {
+  if (isSupabaseEnabled()) {
+    const { data: deptData, error: deptError } = await getSupabase()
+      .from('departments')
+      .select('*')
+      .order('sort_order', { ascending: true })
+      .order('name', { ascending: true });
+    if (deptError) {
+      console.error('Supabase exportBackupBundle departments error:', deptError);
+      throw new Error('Gagal mengekspor master bidang dari Supabase.', { cause: deptError });
+    }
+
+    const visits: VisitRow[] = [];
+    const pageSize = 1000;
+    let offset = 0;
+    while (true) {
+      const { data: visitPage, error: visitError } = await getSupabase()
+        .from('visits')
+        .select('*')
+        .order('visit_date', { ascending: true })
+        .order('queue_number', { ascending: true })
+        .range(offset, offset + pageSize - 1);
+      if (visitError) {
+        console.error('Supabase exportBackupBundle visits error:', visitError);
+        throw new Error('Gagal mengekspor data kunjungan dari Supabase.', { cause: visitError });
+      }
+      const batch = (visitPage ?? []) as VisitRow[];
+      visits.push(...batch);
+      if (batch.length < pageSize) break;
+      offset += pageSize;
+    }
+
+    return {
+      departments: (deptData ?? []) as DepartmentRow[],
+      visits,
+    };
+  }
+
+  const departments = db
+    .prepare('SELECT * FROM departments ORDER BY sort_order ASC, name ASC')
+    .all() as unknown as DepartmentRow[];
+  const visits = db
+    .prepare('SELECT * FROM visits ORDER BY visit_date ASC, queue_number ASC, check_in_at ASC')
+    .all() as unknown as VisitRow[];
+
+  return { departments, visits };
+}
+
+export async function importBackupBundle(input: {
+  departments: BackupImportDepartmentInput[];
+  visits: BackupImportVisitInput[];
+  conflictMode: 'skip' | 'overwrite';
+}): Promise<BackupImportSummary> {
+  const summary: BackupImportSummary = {
+    departmentsAdded: 0,
+    departmentsUpdated: 0,
+    departmentsSkipped: 0,
+    visitsAdded: 0,
+    visitsUpdated: 0,
+    visitsSkipped: 0,
+  };
+  const now = Date.now();
+  const maxQueueByDate = new Map<string, number>();
+
+  for (const v of input.visits) {
+    const prevMax = maxQueueByDate.get(v.visitDate) ?? 0;
+    if (v.queueNumber > prevMax) {
+      maxQueueByDate.set(v.visitDate, v.queueNumber);
+    }
+  }
+
+  if (isSupabaseEnabled()) {
+    const supabase = getSupabase();
+    const { data: existingDeptsData, error: deptLoadErr } = await supabase
+      .from('departments')
+      .select('*');
+    if (deptLoadErr) {
+      throw new Error('Gagal membaca master bidang saat import.', { cause: deptLoadErr });
+    }
+    const existingDepts = (existingDeptsData ?? []) as DepartmentRow[];
+    const deptById = new Map(existingDepts.map((d) => [d.id, d]));
+    const deptByNameLower = new Map(existingDepts.map((d) => [d.name.toLowerCase(), d]));
+
+    for (const dept of input.departments) {
+      const matched = deptById.get(dept.id) || deptByNameLower.get(dept.name.toLowerCase());
+      if (!matched) {
+        const rowId = dept.id || crypto.randomUUID();
+        const { error } = await supabase.from('departments').insert({
+          id: rowId,
+          name: dept.name,
+          is_active: dept.isActive ? 1 : 0,
+          sort_order: dept.sortOrder,
+          created_at: now,
+        });
+        if (error) {
+          summary.departmentsSkipped += 1;
+        } else {
+          const insertedRow: DepartmentRow = {
+            id: rowId,
+            name: dept.name,
+            is_active: dept.isActive ? 1 : 0,
+            sort_order: dept.sortOrder,
+            created_at: now,
+          };
+          deptById.set(rowId, insertedRow);
+          deptByNameLower.set(dept.name.toLowerCase(), insertedRow);
+          summary.departmentsAdded += 1;
+        }
+      } else if (input.conflictMode === 'overwrite') {
+        const conflictOther = deptByNameLower.get(dept.name.toLowerCase());
+        const nextName =
+          conflictOther && conflictOther.id !== matched.id ? matched.name : dept.name;
+        const { error } = await supabase
+          .from('departments')
+          .update({
+            name: nextName,
+            is_active: dept.isActive ? 1 : 0,
+            sort_order: dept.sortOrder,
+          })
+          .eq('id', matched.id);
+        if (error) {
+          summary.departmentsSkipped += 1;
+        } else {
+          summary.departmentsUpdated += 1;
+        }
+      } else {
+        summary.departmentsSkipped += 1;
+      }
+    }
+
+    const existingVisitIds = new Set<string>();
+    let offset = 0;
+    while (true) {
+      const { data: idBatch, error: idErr } = await supabase
+        .from('visits')
+        .select('id')
+        .range(offset, offset + 999);
+      if (idErr) {
+        throw new Error('Gagal memeriksa data kunjungan saat import.', { cause: idErr });
+      }
+      const rows = (idBatch ?? []) as { id: string }[];
+      for (const r of rows) existingVisitIds.add(r.id);
+      if (rows.length < 1000) break;
+      offset += 1000;
+    }
+
+    for (const v of input.visits) {
+      const exists = existingVisitIds.has(v.id);
+      if (!exists) {
+        const tokenHash = crypto
+          .createHash('sha256')
+          .update(crypto.randomBytes(24).toString('hex'))
+          .digest('hex');
+        const createdMs = Date.parse(v.checkInAt) || now;
+        const { error } = await supabase.from('visits').insert({
+          id: v.id,
+          queue_number: v.queueNumber,
+          queue_code: v.queueCode,
+          visit_date: v.visitDate,
+          full_name: v.fullName,
+          phone: v.phone,
+          visitor_category: v.visitorCategory,
+          institution_address: v.institutionAddress,
+          department: v.department,
+          official_name: null,
+          purpose: v.purpose,
+          signature_data: v.signatureData,
+          status: v.status,
+          check_in_at: v.checkInAt,
+          check_out_at: v.checkOutAt,
+          checkout_token_hash: tokenHash,
+          created_at: createdMs,
+        });
+        if (error) {
+          summary.visitsSkipped += 1;
+        } else {
+          existingVisitIds.add(v.id);
+          summary.visitsAdded += 1;
+        }
+      } else if (input.conflictMode === 'overwrite') {
+        const { error } = await supabase
+          .from('visits')
+          .update({
+            queue_number: v.queueNumber,
+            queue_code: v.queueCode,
+            visit_date: v.visitDate,
+            full_name: v.fullName,
+            phone: v.phone,
+            visitor_category: v.visitorCategory,
+            institution_address: v.institutionAddress,
+            department: v.department,
+            purpose: v.purpose,
+            signature_data: v.signatureData,
+            status: v.status,
+            check_in_at: v.checkInAt,
+            check_out_at: v.checkOutAt,
+          })
+          .eq('id', v.id);
+        if (error) {
+          summary.visitsSkipped += 1;
+        } else {
+          summary.visitsUpdated += 1;
+        }
+      } else {
+        summary.visitsSkipped += 1;
+      }
+    }
+
+    for (const [visitDate, importedMax] of maxQueueByDate.entries()) {
+      const { data: counterRow } = await supabase
+        .from('daily_counters')
+        .select('last_number')
+        .eq('visit_date', visitDate)
+        .maybeSingle();
+      const currentNum = Number((counterRow as { last_number?: number } | null)?.last_number ?? 0);
+      if (importedMax > currentNum) {
+        await supabase.from('daily_counters').upsert({
+          visit_date: visitDate,
+          last_number: importedMax,
+        });
+      }
+    }
+
+    return summary;
+  }
+
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const findDeptById = db.prepare('SELECT * FROM departments WHERE id = ?');
+    const findDeptByName = db.prepare('SELECT * FROM departments WHERE LOWER(name) = LOWER(?)');
+    const insertDept = db.prepare(
+      'INSERT INTO departments (id, name, is_active, sort_order, created_at) VALUES (?, ?, ?, ?, ?)',
+    );
+    const updateDept = db.prepare(
+      'UPDATE departments SET name = ?, is_active = ?, sort_order = ? WHERE id = ?',
+    );
+
+    for (const dept of input.departments) {
+      const byId = findDeptById.get(dept.id) as DepartmentRow | undefined;
+      const byName = findDeptByName.get(dept.name) as DepartmentRow | undefined;
+      const matched = byId || byName;
+
+      if (!matched) {
+        insertDept.run(
+          dept.id || crypto.randomUUID(),
+          dept.name,
+          dept.isActive ? 1 : 0,
+          dept.sortOrder,
+          now,
+        );
+        summary.departmentsAdded += 1;
+      } else if (input.conflictMode === 'overwrite') {
+        const safeName = byName && byName.id !== matched.id ? matched.name : dept.name;
+        updateDept.run(safeName, dept.isActive ? 1 : 0, dept.sortOrder, matched.id);
+        summary.departmentsUpdated += 1;
+      } else {
+        summary.departmentsSkipped += 1;
+      }
+    }
+
+    const findVisitById = db.prepare('SELECT id FROM visits WHERE id = ?');
+    const insertVisit = db.prepare(
+      `INSERT INTO visits (
+        id, queue_number, queue_code, visit_date, full_name, phone,
+        visitor_category, institution_address, department, official_name,
+        purpose, signature_data, status, check_in_at, check_out_at,
+        checkout_token_hash, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const updateVisit = db.prepare(
+      `UPDATE visits SET
+        queue_number = ?, queue_code = ?, visit_date = ?, full_name = ?, phone = ?,
+        visitor_category = ?, institution_address = ?, department = ?, purpose = ?,
+        signature_data = ?, status = ?, check_in_at = ?, check_out_at = ?
+      WHERE id = ?`,
+    );
+
+    for (const v of input.visits) {
+      const existing = findVisitById.get(v.id) as { id: string } | undefined;
+      if (!existing) {
+        const tokenHash = crypto
+          .createHash('sha256')
+          .update(crypto.randomBytes(24).toString('hex'))
+          .digest('hex');
+        const createdMs = Date.parse(v.checkInAt) || now;
+        insertVisit.run(
+          v.id,
+          v.queueNumber,
+          v.queueCode,
+          v.visitDate,
+          v.fullName,
+          v.phone,
+          v.visitorCategory,
+          v.institutionAddress,
+          v.department,
+          v.purpose,
+          v.signatureData,
+          v.status,
+          v.checkInAt,
+          v.checkOutAt,
+          tokenHash,
+          createdMs,
+        );
+        summary.visitsAdded += 1;
+      } else if (input.conflictMode === 'overwrite') {
+        updateVisit.run(
+          v.queueNumber,
+          v.queueCode,
+          v.visitDate,
+          v.fullName,
+          v.phone,
+          v.visitorCategory,
+          v.institutionAddress,
+          v.department,
+          v.purpose,
+          v.signatureData,
+          v.status,
+          v.checkInAt,
+          v.checkOutAt,
+          v.id,
+        );
+        summary.visitsUpdated += 1;
+      } else {
+        summary.visitsSkipped += 1;
+      }
+    }
+
+    const selectCounter = db.prepare('SELECT last_number FROM daily_counters WHERE visit_date = ?');
+    const upsertCounter = db.prepare(
+      `INSERT INTO daily_counters (visit_date, last_number)
+       VALUES (?, ?)
+       ON CONFLICT(visit_date) DO UPDATE SET last_number = MAX(daily_counters.last_number, excluded.last_number)`,
+    );
+    for (const [visitDate, importedMax] of maxQueueByDate.entries()) {
+      const row = selectCounter.get(visitDate) as { last_number: number } | undefined;
+      if (!row || importedMax > row.last_number) {
+        upsertCounter.run(visitDate, importedMax);
+      }
+    }
+
+    db.exec('COMMIT');
+    return summary;
+  } catch (err) {
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      // ignore rollback error
+    }
+    throw err;
+  }
+}

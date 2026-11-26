@@ -1604,6 +1604,292 @@ BEGIN
 END;
 $$;
 
+-- ============================================================================
+-- RPC BACKUP & IMPORT DATA (SUPER ADMIN ONLY)
+-- ============================================================================
+
+CREATE OR REPLACE FUNCTION public.api_admin_export_backup(p_token TEXT)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, extensions
+AS $$
+DECLARE
+  v_actor public.users;
+  v_departments JSONB;
+  v_visits JSONB;
+  v_dept_count INT := 0;
+  v_visit_count INT := 0;
+BEGIN
+  v_actor := public._verify_app_session(p_token);
+  IF v_actor.id IS NULL THEN
+    RETURN jsonb_build_object('ok', FALSE, 'status', 401, 'error', 'Sesi login tidak valid atau telah berakhir.');
+  END IF;
+  IF v_actor.role <> 'super_admin' THEN
+    RETURN jsonb_build_object('ok', FALSE, 'status', 403, 'error', 'Akses ditolak. Hanya Super Admin yang dapat melakukan backup data.');
+  END IF;
+
+  SELECT
+    COALESCE(
+      jsonb_agg(
+        jsonb_build_object(
+          'id', d.id,
+          'name', d.name,
+          'isActive', (d.is_active = 1),
+          'sortOrder', d.sort_order
+        )
+        ORDER BY d.sort_order ASC, d.name ASC
+      ),
+      '[]'::JSONB
+    ),
+    COUNT(*)::INT
+  INTO v_departments, v_dept_count
+  FROM public.departments d;
+
+  SELECT
+    COALESCE(
+      jsonb_agg(public._map_visit_json(v) ORDER BY v.visit_date ASC, v.queue_number ASC, v.check_in_at ASC),
+      '[]'::JSONB
+    ),
+    COUNT(*)::INT
+  INTO v_visits, v_visit_count
+  FROM public.visits v;
+
+  PERFORM public._record_audit(
+    v_actor.username,
+    v_actor.role,
+    'EXPORT_BACKUP',
+    'backup-si-tamu-bpbd',
+    'Mengekspor cadangan ' || v_dept_count || ' bidang dan ' || v_visit_count || ' kunjungan'
+  );
+
+  RETURN jsonb_build_object(
+    'ok', TRUE,
+    'format', 'si-tamu-bpbd-backup',
+    'version', 1,
+    'exportedAt', to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'exportedBy', v_actor.username,
+    'departments', v_departments,
+    'visits', v_visits
+  );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.api_admin_import_backup(
+  p_token TEXT,
+  p_backup JSONB,
+  p_conflict_mode TEXT DEFAULT 'skip'
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, extensions
+AS $$
+DECLARE
+  v_actor public.users;
+  v_mode TEXT := CASE WHEN p_conflict_mode = 'overwrite' THEN 'overwrite' ELSE 'skip' END;
+  v_depts JSONB;
+  v_visits JSONB;
+  v_item JSONB;
+  v_now BIGINT := (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT;
+
+  v_dept_added INT := 0;
+  v_dept_updated INT := 0;
+  v_dept_skipped INT := 0;
+  v_visit_added INT := 0;
+  v_visit_updated INT := 0;
+  v_visit_skipped INT := 0;
+
+  v_dept_id TEXT;
+  v_dept_name TEXT;
+  v_dept_active INT;
+  v_dept_sort INT;
+  v_existing_dept public.departments;
+  v_name_conflict_id TEXT;
+
+  v_visit_id TEXT;
+  v_queue_num INT;
+  v_queue_code TEXT;
+  v_visit_date TEXT;
+  v_full_name TEXT;
+  v_phone TEXT;
+  v_category TEXT;
+  v_inst TEXT;
+  v_dept TEXT;
+  v_purpose TEXT;
+  v_sig TEXT;
+  v_status TEXT;
+  v_check_in_at TEXT;
+  v_check_out_at TEXT;
+  v_existing_visit_id TEXT;
+  v_token_hash TEXT;
+BEGIN
+  v_actor := public._verify_app_session(p_token);
+  IF v_actor.id IS NULL THEN
+    RETURN jsonb_build_object('ok', FALSE, 'status', 401, 'error', 'Sesi login tidak valid atau telah berakhir.');
+  END IF;
+  IF v_actor.role <> 'super_admin' THEN
+    RETURN jsonb_build_object('ok', FALSE, 'status', 403, 'error', 'Akses ditolak. Hanya Super Admin yang dapat mengimpor data.');
+  END IF;
+
+  IF p_backup IS NULL OR jsonb_typeof(p_backup) <> 'object' OR COALESCE(p_backup->>'format', '') <> 'si-tamu-bpbd-backup' THEN
+    RETURN jsonb_build_object('ok', FALSE, 'status', 400, 'error', 'File bukan format backup resmi SI-TAMU BPBD.');
+  END IF;
+
+  v_depts := COALESCE(p_backup->'departments', '[]'::JSONB);
+  v_visits := COALESCE(p_backup->'visits', '[]'::JSONB);
+
+  IF jsonb_typeof(v_depts) <> 'array' OR jsonb_typeof(v_visits) <> 'array' THEN
+    RETURN jsonb_build_object('ok', FALSE, 'status', 400, 'error', 'Struktur data departments/visits pada file backup tidak valid.');
+  END IF;
+
+  IF jsonb_array_length(v_depts) > 500 OR jsonb_array_length(v_visits) > 20000 THEN
+    RETURN jsonb_build_object('ok', FALSE, 'status', 400, 'error', 'Jumlah data melebihi batas maksimal impor.');
+  END IF;
+
+  -- 1. Import Master Bidang Tujuan
+  FOR v_item IN SELECT * FROM jsonb_array_elements(v_depts)
+  LOOP
+    IF jsonb_typeof(v_item) <> 'object' THEN
+      CONTINUE;
+    END IF;
+
+    v_dept_name := LEFT(TRIM(COALESCE(v_item->>'name', '')), 100);
+    IF LENGTH(v_dept_name) < 2 THEN
+      v_dept_skipped := v_dept_skipped + 1;
+      CONTINUE;
+    END IF;
+
+    v_dept_id := COALESCE(NULLIF(LEFT(TRIM(COALESCE(v_item->>'id', '')), 80), ''), gen_random_uuid()::TEXT);
+    v_dept_active := CASE WHEN COALESCE((v_item->>'isActive')::BOOLEAN, TRUE) THEN 1 ELSE 0 END;
+    v_dept_sort := CASE WHEN COALESCE(v_item->>'sortOrder', '') ~ '^-?\d{1,5}$' THEN (v_item->>'sortOrder')::INT ELSE 1 END;
+
+    SELECT * INTO v_existing_dept
+    FROM public.departments
+    WHERE id = v_dept_id OR LOWER(name) = LOWER(v_dept_name)
+    ORDER BY CASE WHEN id = v_dept_id THEN 0 ELSE 1 END
+    LIMIT 1;
+
+    IF v_existing_dept.id IS NULL THEN
+      INSERT INTO public.departments (id, name, is_active, sort_order, created_at)
+      VALUES (v_dept_id, v_dept_name, v_dept_active, v_dept_sort, v_now);
+      v_dept_added := v_dept_added + 1;
+    ELSIF v_mode = 'overwrite' THEN
+      SELECT id INTO v_name_conflict_id
+      FROM public.departments
+      WHERE LOWER(name) = LOWER(v_dept_name) AND id <> v_existing_dept.id
+      LIMIT 1;
+
+      UPDATE public.departments
+      SET name = CASE WHEN v_name_conflict_id IS NULL THEN v_dept_name ELSE name END,
+          is_active = v_dept_active,
+          sort_order = v_dept_sort
+      WHERE id = v_existing_dept.id;
+      v_dept_updated := v_dept_updated + 1;
+    ELSE
+      v_dept_skipped := v_dept_skipped + 1;
+    END IF;
+  END LOOP;
+
+  -- 2. Import Data Kunjungan Tamu
+  FOR v_item IN SELECT * FROM jsonb_array_elements(v_visits)
+  LOOP
+    IF jsonb_typeof(v_item) <> 'object' THEN
+      CONTINUE;
+    END IF;
+
+    v_full_name := LEFT(TRIM(COALESCE(v_item->>'fullName', '')), 120);
+    v_visit_date := LEFT(TRIM(COALESCE(v_item->>'visitDate', '')), 10);
+    v_dept := LEFT(TRIM(COALESCE(v_item->>'department', '')), 100);
+    v_sig := TRIM(COALESCE(v_item->>'signatureData', ''));
+
+    IF LENGTH(v_full_name) < 2 OR v_visit_date !~ '^\d{4}-\d{2}-\d{2}$' OR v_dept = '' OR LEFT(v_sig, 22) <> 'data:image/png;base64,' OR LENGTH(v_sig) > 350000 THEN
+      v_visit_skipped := v_visit_skipped + 1;
+      CONTINUE;
+    END IF;
+
+    v_visit_id := COALESCE(NULLIF(LEFT(TRIM(COALESCE(v_item->>'id', '')), 80), ''), gen_random_uuid()::TEXT);
+    v_queue_num := CASE WHEN COALESCE(v_item->>'queueNumber', '') ~ '^\d{1,6}$' THEN GREATEST((v_item->>'queueNumber')::INT, 1) ELSE 1 END;
+    v_queue_code := COALESCE(NULLIF(LEFT(TRIM(COALESCE(v_item->>'queueCode', '')), 20), ''), 'T-' || LPAD(v_queue_num::TEXT, 3, '0'));
+    v_phone := COALESCE(NULLIF(LEFT(TRIM(COALESCE(v_item->>'phone', '')), 24), ''), '-');
+    v_category := LEFT(TRIM(COALESCE(v_item->>'visitorCategory', '')), 60);
+    IF v_category NOT IN ('Masyarakat Umum', 'Instansi Pemerintah/OPD', 'TNI/Polri', 'Relawan/Komunitas', 'Swasta/Media') THEN
+      v_category := 'Masyarakat Umum';
+    END IF;
+    v_inst := COALESCE(NULLIF(LEFT(TRIM(COALESCE(v_item->>'institutionAddress', '')), 200), ''), '-');
+    v_purpose := COALESCE(NULLIF(LEFT(TRIM(COALESCE(v_item->>'purpose', '')), 500), ''), '-');
+    v_status := CASE WHEN (v_item->>'status') = 'Selesai' THEN 'Selesai' ELSE 'Sedang Berkunjung' END;
+    v_check_in_at := COALESCE(NULLIF(LEFT(TRIM(COALESCE(v_item->>'checkInAt', '')), 40), ''), v_visit_date || 'T08:00:00.000Z');
+    v_check_out_at := CASE WHEN v_status = 'Selesai'
+      THEN COALESCE(NULLIF(LEFT(TRIM(COALESCE(v_item->>'checkOutAt', '')), 40), ''), v_check_in_at)
+      ELSE NULL END;
+
+    SELECT id INTO v_existing_visit_id FROM public.visits WHERE id = v_visit_id;
+
+    IF v_existing_visit_id IS NULL THEN
+      v_token_hash := encode(digest(encode(gen_random_bytes(24), 'hex'), 'sha256'), 'hex');
+      INSERT INTO public.visits (
+        id, queue_number, queue_code, visit_date, full_name, phone,
+        visitor_category, institution_address, department, official_name,
+        purpose, signature_data, status, check_in_at, check_out_at,
+        checkout_token_hash, created_at
+      )
+      VALUES (
+        v_visit_id, v_queue_num, v_queue_code, v_visit_date, v_full_name, v_phone,
+        v_category, v_inst, v_dept, NULL,
+        v_purpose, v_sig, v_status, v_check_in_at, v_check_out_at,
+        v_token_hash, v_now
+      );
+      v_visit_added := v_visit_added + 1;
+    ELSIF v_mode = 'overwrite' THEN
+      UPDATE public.visits
+      SET queue_number = v_queue_num,
+          queue_code = v_queue_code,
+          visit_date = v_visit_date,
+          full_name = v_full_name,
+          phone = v_phone,
+          visitor_category = v_category,
+          institution_address = v_inst,
+          department = v_dept,
+          purpose = v_purpose,
+          signature_data = v_sig,
+          status = v_status,
+          check_in_at = v_check_in_at,
+          check_out_at = v_check_out_at
+      WHERE id = v_visit_id;
+      v_visit_updated := v_visit_updated + 1;
+    ELSE
+      v_visit_skipped := v_visit_skipped + 1;
+    END IF;
+
+    INSERT INTO public.daily_counters (visit_date, last_number)
+    VALUES (v_visit_date, v_queue_num)
+    ON CONFLICT (visit_date)
+    DO UPDATE SET last_number = GREATEST(public.daily_counters.last_number, EXCLUDED.last_number);
+  END LOOP;
+
+  PERFORM public._record_audit(
+    v_actor.username,
+    v_actor.role,
+    'IMPORT_BACKUP',
+    'backup-si-tamu-bpbd',
+    'Import (' || v_mode || '): +' || v_dept_added || ' bidang, +' || v_visit_added || ' kunjungan, ' || v_visit_updated || ' diperbarui'
+  );
+
+  RETURN jsonb_build_object(
+    'ok', TRUE,
+    'summary', jsonb_build_object(
+      'departmentsAdded', v_dept_added,
+      'departmentsUpdated', v_dept_updated,
+      'departmentsSkipped', v_dept_skipped,
+      'visitsAdded', v_visit_added,
+      'visitsUpdated', v_visit_updated,
+      'visitsSkipped', v_visit_skipped
+    )
+  );
+END;
+$$;
+
 -- Izinkan pemanggilan RPC aman dari klien browser (anon/authenticated) & service_role
 GRANT EXECUTE ON FUNCTION public.api_get_public_departments() TO anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.api_submit_visit(TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT) TO anon, authenticated, service_role;
@@ -1630,3 +1916,5 @@ GRANT EXECUTE ON FUNCTION public.api_admin_list_reset_requests(TEXT) TO anon, au
 GRANT EXECUTE ON FUNCTION public.api_admin_issue_reset_token(TEXT, TEXT) TO anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.api_admin_dismiss_reset_request(TEXT, TEXT) TO anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.api_admin_list_audit_logs(TEXT) TO anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.api_admin_export_backup(TEXT) TO anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.api_admin_import_backup(TEXT, JSONB, TEXT) TO anon, authenticated, service_role;

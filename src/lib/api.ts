@@ -2,6 +2,9 @@ import type {
   AdminAuthStatus,
   AuditLogRecord,
   AuthUser,
+  BackupConflictMode,
+  BackupDataBundle,
+  BackupImportResult,
   DashboardStats,
   DepartmentRecord,
   ManagedUser,
@@ -754,4 +757,124 @@ export async function fetchAuditLogs(token: string): Promise<AuditLogRecord[]> {
     headers: { Authorization: `Bearer ${token}` },
   });
   return data.logs ?? [];
+}
+
+function isMissingRpcError(err: { code?: string; message?: string } | null | undefined): boolean {
+  if (!err) return false;
+  const msg = String(err.message || '').toLowerCase();
+  return (
+    err.code === 'PGRST202' ||
+    err.code === '42883' ||
+    msg.includes('could not find the function') ||
+    msg.includes('does not exist')
+  );
+}
+
+export async function exportBackupBundle(token: string): Promise<BackupDataBundle> {
+  if (isBrowserSupabaseConfigured()) {
+    const supabase = getBrowserSupabase();
+    const { data, error } = await supabase.rpc('api_admin_export_backup', { p_token: token });
+
+    if (!error) {
+      const payload = (data ?? {}) as RpcPayload & BackupDataBundle;
+      if (payload.ok === false) {
+        throw new ApiError(Number(payload.status || 400), payload.error || 'Gagal membuat backup.');
+      }
+      return {
+        format: 'si-tamu-bpbd-backup',
+        version: Number(payload.version || 1),
+        exportedAt: payload.exportedAt || new Date().toISOString(),
+        exportedBy: payload.exportedBy,
+        departments: payload.departments ?? [],
+        visits: payload.visits ?? [],
+      };
+    }
+
+    // Fallback gracefully if user hasn't executed the new backup SQL RPC on Supabase yet
+    if (isMissingRpcError(error)) {
+      const [departments, visitsRes] = await Promise.all([
+        fetchAdminDepartments(token),
+        callSupabaseRpc<RpcPayload & { visits: VisitRecord[] }>('api_admin_export_visits', {
+          p_token: token,
+          p_search: '',
+          p_department: '',
+          p_status: '',
+          p_date_from: '',
+          p_date_to: '',
+        }),
+      ]);
+      return {
+        format: 'si-tamu-bpbd-backup',
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        departments,
+        visits: visitsRes.visits ?? [],
+      };
+    }
+
+    console.error('Supabase RPC api_admin_export_backup error:', error);
+    throw new ApiError(500, 'Gagal terhubung ke database Supabase untuk mengekspor backup.');
+  }
+
+  return fetchApiJson<BackupDataBundle>('/api/admin/backup', {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+export async function importBackupBundle(
+  token: string,
+  backup: BackupDataBundle,
+  conflictMode: BackupConflictMode,
+): Promise<BackupImportResult> {
+  if (isBrowserSupabaseConfigured()) {
+    const supabase = getBrowserSupabase();
+    const { data, error } = await supabase.rpc('api_admin_import_backup', {
+      p_token: token,
+      p_backup: backup,
+      p_conflict_mode: conflictMode,
+    });
+
+    if (error) {
+      if (isMissingRpcError(error)) {
+        throw new ApiError(
+          400,
+          'Fungsi SQL import backup (api_admin_import_backup) belum dijalankan di Supabase SQL Editor. Silakan jalankan skrip SQL terbaru pada menu SQL Editor Supabase terlebih dahulu.',
+        );
+      }
+      console.error('Supabase RPC api_admin_import_backup error:', error);
+      throw new ApiError(500, 'Gagal memproses import backup di database Supabase.');
+    }
+
+    const payload = (data ?? {}) as RpcPayload & { summary?: BackupImportResult };
+    if (payload.ok === false) {
+      throw new ApiError(
+        Number(payload.status || 400),
+        payload.error || 'Gagal mengimpor file backup.',
+      );
+    }
+
+    return (
+      payload.summary ?? {
+        departmentsAdded: 0,
+        departmentsUpdated: 0,
+        departmentsSkipped: 0,
+        visitsAdded: 0,
+        visitsUpdated: 0,
+        visitsSkipped: 0,
+      }
+    );
+  }
+
+  const data = await fetchApiJson<{ ok: boolean; summary: BackupImportResult }>(
+    '/api/admin/import',
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ backup, conflictMode }),
+    },
+  );
+  return data.summary;
 }

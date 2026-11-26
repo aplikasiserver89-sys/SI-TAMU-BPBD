@@ -28,6 +28,7 @@ import {
   createUser,
   deleteVisitById,
   dismissResetRequest,
+  exportBackupBundle,
   findDepartmentById,
   findDepartmentByNameInsensitive,
   findPasswordResetRequestById,
@@ -38,6 +39,7 @@ import {
   getActiveStorageBackend,
   getDashboardData,
   getMaxDepartmentSortOrder,
+  importBackupBundle,
   insertDepartment,
   insertPasswordResetRequest,
   insertVisitTransaction,
@@ -54,6 +56,8 @@ import {
   updateUser,
   updateUserPassword,
   updateVisitStatus,
+  type BackupImportDepartmentInput,
+  type BackupImportVisitInput,
 } from './server/store.ts';
 
 const PORT = 3000;
@@ -102,7 +106,15 @@ async function getActiveDepartmentSet(): Promise<Set<string>> {
 async function startServer() {
   const app = express();
   app.set('trust proxy', 1);
-  app.use(express.json({ limit: '512kb' }));
+  const standardJsonParser = express.json({ limit: '512kb' });
+  const backupJsonParser = express.json({ limit: '15mb' });
+  app.use((req, res, next) => {
+    if (req.path === '/api/admin/import') {
+      backupJsonParser(req, res, next);
+      return;
+    }
+    standardJsonParser(req, res, next);
+  });
 
   app.use((_req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -1363,6 +1375,178 @@ async function startServer() {
       } catch (err) {
         console.error('Error listing audit logs:', err);
         res.status(500).json({ error: 'Gagal memuat log audit.' });
+      }
+    },
+  );
+
+  // RBAC: Backup & Import Data (super_admin ONLY)
+  app.get(
+    '/api/admin/backup',
+    requireAuth,
+    requireRole('super_admin'),
+    async (req: Request, res: Response) => {
+      const actor = req.authUser!;
+      try {
+        const { departments, visits } = await exportBackupBundle();
+
+        await recordAuditLog(
+          actor.username,
+          actor.role,
+          'EXPORT_BACKUP',
+          'backup-si-tamu-bpbd',
+          `Mengekspor cadangan ${departments.length} bidang dan ${visits.length} kunjungan`,
+        );
+
+        res.json({
+          format: 'si-tamu-bpbd-backup',
+          version: 1,
+          exportedAt: new Date().toISOString(),
+          exportedBy: actor.username,
+          departments: departments.map((d) => ({
+            id: d.id,
+            name: d.name,
+            isActive: d.is_active === 1,
+            sortOrder: d.sort_order,
+          })),
+          visits: visits.map(mapVisitRow),
+        });
+      } catch (err) {
+        console.error('Error exporting backup:', err);
+        res.status(500).json({ error: 'Gagal membuat file backup data.' });
+      }
+    },
+  );
+
+  app.post(
+    '/api/admin/import',
+    requireAuth,
+    requireRole('super_admin'),
+    async (req: Request, res: Response) => {
+      const actor = req.authUser!;
+      const body = req.body as Record<string, unknown> | null;
+      if (!body || typeof body !== 'object') {
+        res.status(400).json({ error: 'Format file backup tidak valid.' });
+        return;
+      }
+
+      const rawBackup =
+        body.backup && typeof body.backup === 'object'
+          ? (body.backup as Record<string, unknown>)
+          : body;
+
+      if (
+        rawBackup.format !== 'si-tamu-bpbd-backup' ||
+        (!Array.isArray(rawBackup.departments) && !Array.isArray(rawBackup.visits))
+      ) {
+        res.status(400).json({
+          error:
+            'File yang diunggah bukan file backup resmi SI-TAMU BPBD (format harus "si-tamu-bpbd-backup").',
+        });
+        return;
+      }
+
+      const conflictMode = body.conflictMode === 'overwrite' ? 'overwrite' : 'skip';
+      const rawDepts = Array.isArray(rawBackup.departments) ? rawBackup.departments : [];
+      const rawVisits = Array.isArray(rawBackup.visits) ? rawBackup.visits : [];
+
+      if (rawDepts.length > 500 || rawVisits.length > 20_000) {
+        res.status(400).json({ error: 'Jumlah data pada file backup melebihi batas maksimal impor.' });
+        return;
+      }
+
+      const cleanDepartments: BackupImportDepartmentInput[] = [];
+      for (let i = 0; i < rawDepts.length; i += 1) {
+        const item = rawDepts[i] as Record<string, unknown> | null;
+        if (!item || typeof item !== 'object') continue;
+        const name = sanitizeString(item.name, 100);
+        if (name.length < 2) continue;
+        cleanDepartments.push({
+          id: sanitizeString(item.id, 80) || crypto.randomUUID(),
+          name,
+          isActive: item.isActive !== false,
+          sortOrder: Number.isFinite(Number(item.sortOrder)) ? Number(item.sortOrder) : i + 1,
+        });
+      }
+
+      const cleanVisits: BackupImportVisitInput[] = [];
+      for (const rawItem of rawVisits) {
+        const item = rawItem as Record<string, unknown> | null;
+        if (!item || typeof item !== 'object') continue;
+        const fullName = sanitizeString(item.fullName, 120);
+        const visitDate = sanitizeString(item.visitDate, 10);
+        const department = sanitizeString(item.department, 100);
+        const purpose = sanitizeString(item.purpose, 500);
+        if (fullName.length < 2 || !/^\d{4}-\d{2}-\d{2}$/.test(visitDate) || !department) {
+          continue;
+        }
+        const queueNumRaw = Number(item.queueNumber);
+        const queueNumber =
+          Number.isInteger(queueNumRaw) && queueNumRaw > 0 && queueNumRaw < 1_000_000
+            ? queueNumRaw
+            : 1;
+        const queueCode =
+          sanitizeString(item.queueCode, 20) || `T-${String(queueNumber).padStart(3, '0')}`;
+        const rawSig = typeof item.signatureData === 'string' ? item.signatureData.trim() : '';
+        const signatureData =
+          rawSig.startsWith('data:image/png;base64,') && rawSig.length <= 350_000 ? rawSig : '';
+        if (!signatureData) continue;
+
+        const rawCategory = sanitizeString(item.visitorCategory, 60);
+        const visitorCategory = VISITOR_CATEGORIES.has(rawCategory)
+          ? rawCategory
+          : 'Masyarakat Umum';
+        const status = item.status === 'Selesai' ? 'Selesai' : 'Sedang Berkunjung';
+        const checkInAt =
+          sanitizeString(item.checkInAt, 40) || `${visitDate}T08:00:00.000Z`;
+        const checkOutAt =
+          status === 'Selesai'
+            ? sanitizeString(item.checkOutAt, 40) || checkInAt
+            : null;
+
+        cleanVisits.push({
+          id: sanitizeString(item.id, 80) || crypto.randomUUID(),
+          queueNumber,
+          queueCode,
+          visitDate,
+          fullName,
+          phone: sanitizeString(item.phone, 24) || '-',
+          visitorCategory,
+          institutionAddress: sanitizeString(item.institutionAddress, 200) || '-',
+          department,
+          purpose: purpose || '-',
+          signatureData,
+          status,
+          checkInAt,
+          checkOutAt,
+        });
+      }
+
+      if (cleanDepartments.length === 0 && cleanVisits.length === 0) {
+        res.status(400).json({
+          error: 'Tidak ada data bidang atau kunjungan yang valid untuk diimpor dari file tersebut.',
+        });
+        return;
+      }
+
+      try {
+        const summary = await importBackupBundle({
+          departments: cleanDepartments,
+          visits: cleanVisits,
+          conflictMode,
+        });
+
+        await recordAuditLog(
+          actor.username,
+          actor.role,
+          'IMPORT_BACKUP',
+          'backup-si-tamu-bpbd',
+          `Import (${conflictMode}): +${summary.departmentsAdded} bidang, +${summary.visitsAdded} kunjungan, ${summary.visitsUpdated} diperbarui`,
+        );
+
+        res.json({ ok: true, summary });
+      } catch (err) {
+        console.error('Error importing backup:', err);
+        res.status(500).json({ error: 'Gagal memulihkan data dari file backup.' });
       }
     },
   );

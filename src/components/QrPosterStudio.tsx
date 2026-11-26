@@ -145,27 +145,37 @@ export function QrPosterStudio({ onPrintPoster }: QrPosterStudioProps) {
         ctx.restore();
       });
 
+      // Ensure web fonts are settled before rendering text on canvas
+      if (typeof document !== 'undefined' && document.fonts?.ready) {
+        await Promise.race([
+          document.fonts.ready,
+          new Promise<void>((resolve) => window.setTimeout(resolve, 400)),
+        ]);
+      }
+
+      const geoFont = "'Plus Jakarta Sans', 'Outfit', 'Poppins', sans-serif";
+
       // Centered Header text
       ctx.textAlign = 'center';
       ctx.fillStyle = '#CBD5E1';
-      ctx.font = 'bold 24px Arial, Helvetica, sans-serif';
+      ctx.font = `bold 24px ${geoFont}`;
       ctx.fillText('PEMERINTAH KABUPATEN SIDOARJO', 620, 112);
 
       ctx.fillStyle = '#FFFFFF';
-      ctx.font = 'bold 38px Arial, Helvetica, sans-serif';
+      ctx.font = `bold 38px ${geoFont}`;
       ctx.fillText('BPBD KABUPATEN SIDOARJO', 620, 170);
 
       ctx.fillStyle = '#FB923C';
-      ctx.font = 'bold 24px Arial, Helvetica, sans-serif';
+      ctx.font = `bold 24px ${geoFont}`;
       ctx.fillText('SI-TAMU BPBD · SISTEM BUKU TAMU DIGITAL', 620, 222);
 
       // Poster Main Title
       ctx.fillStyle = '#0F294A';
-      ctx.font = 'bold 54px Arial, Helvetica, sans-serif';
+      ctx.font = `bold 54px ${geoFont}`;
       ctx.fillText('SELAMAT DATANG', 620, 440);
 
       ctx.fillStyle = '#334155';
-      ctx.font = 'bold 32px Arial, Helvetica, sans-serif';
+      ctx.font = `bold 32px ${geoFont}`;
       ctx.fillText('Pindai QR Code di bawah ini untuk mengisi', 620, 502);
       ctx.fillText('Buku Tamu Digital sebelum memasuki ruang layanan', 620, 548);
 
@@ -189,11 +199,11 @@ export function QrPosterStudio({ onPrintPoster }: QrPosterStudioProps) {
 
       // Step Instructions
       ctx.fillStyle = '#0F294A';
-      ctx.font = 'bold 30px Arial, Helvetica, sans-serif';
+      ctx.font = `bold 30px ${geoFont}`;
       ctx.fillText('CARA PENGISIAN BUKU TAMU', 620, 1390);
 
       ctx.fillStyle = '#334155';
-      ctx.font = '26px Arial, Helvetica, sans-serif';
+      ctx.font = `26px ${geoFont}`;
       ctx.fillText('1. Buka kamera ponsel atau pemindai QR Code', 620, 1445);
       ctx.fillText('2. Lengkapi data kunjungan & tanda tangan digital', 620, 1490);
       ctx.fillText('3. Simpan bukti nomor urut & tekan Check-Out saat selesai', 620, 1535);
@@ -202,10 +212,10 @@ export function QrPosterStudio({ onPrintPoster }: QrPosterStudioProps) {
       ctx.fillStyle = '#0F294A';
       ctx.fillRect(0, 1620, canvas.width, 134);
       ctx.fillStyle = '#FFFFFF';
-      ctx.font = 'bold 26px Arial, Helvetica, sans-serif';
+      ctx.font = `bold 26px ${geoFont}`;
       ctx.fillText(deskLabel || 'Meja Resepsionis BPBD Kabupaten Sidoarjo', 620, 1680);
       ctx.fillStyle = '#CBD5E1';
-      ctx.font = '20px Arial, Helvetica, sans-serif';
+      ctx.font = `20px ${geoFont}`;
       ctx.fillText(targetUrl.trim() || defaultPublicUrl, 620, 1720);
 
       const blob = await new Promise<Blob | null>((resolve) =>
