@@ -5,6 +5,7 @@ import { PublicGuestPage } from './components/PublicGuestPage';
 import { AdminLoginView } from './components/AdminLoginView';
 import { AdminDashboard } from './components/AdminDashboard';
 import { QrPosterStudio } from './components/QrPosterStudio';
+import { IkmSurveyPopup } from './components/IkmSurveyPopup';
 import { downloadDeskPosterPdf } from './lib/pdfGenerator';
 import { ApiError, fetchVisitReceipt, logoutInternalUser } from './lib/api';
 
@@ -40,6 +41,7 @@ export default function App() {
     visit: VisitRecord;
     checkoutToken: string;
   } | null>(null);
+  const [ikmPopupOpen, setIkmPopupOpen] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -130,6 +132,9 @@ export default function App() {
 
   const handleReceiptUpdated = (updatedVisit: VisitRecord) => {
     setActiveReceipt((prev) => (prev ? { ...prev, visit: updatedVisit } : null));
+    if (updatedVisit.status === 'Selesai') {
+      setIkmPopupOpen(true);
+    }
   };
 
   const handleClearReceipt = () => {
@@ -195,7 +200,11 @@ export default function App() {
         )}
       </div>
 
-      <footer className="no-print border-t border-white/10 bg-[#08172C]/90 mt-12">
+      <footer
+        className={`no-print border-t border-white/10 bg-[#08172C]/90 mt-12 ${
+          activeView === 'public' ? 'pb-20 sm:pb-6' : ''
+        }`}
+      >
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-5 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-300">
           <span>
             SI-TAMU BPBD · Sistem Buku Tamu Digital Badan Penanggulangan Bencana Daerah Kabupaten
@@ -206,6 +215,10 @@ export default function App() {
           </span>
         </div>
       </footer>
+
+      {activeView === 'public' && (
+        <IkmSurveyPopup open={ikmPopupOpen} onOpenChange={setIkmPopupOpen} />
+      )}
     </div>
   );
 }
