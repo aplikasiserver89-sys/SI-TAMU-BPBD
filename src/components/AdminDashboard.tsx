@@ -470,29 +470,37 @@ export function AdminDashboard({
             return (
               <section
                 aria-label="Ringkasan Tamu Hari Ini"
-                className="grid grid-cols-1 sm:grid-cols-3 gap-3.5"
+                className="grid grid-cols-1 md:grid-cols-3 gap-4"
               >
-                {/* 1. Tamu Hari Ini - Biru Cerah */}
+                {/* 1. Tamu Hari Ini - Biru Profesional */}
                 <button
                   type="button"
                   onClick={() => applyQuickPreset('today', true)}
-                  className="text-left bg-gradient-to-br from-[#007BFF] to-[#0056CC] hover:brightness-105 text-white rounded-xl p-4 sm:p-5 shadow-lg transition-all flex items-center justify-between gap-4 border border-white/15"
+                  className="text-left bg-gradient-to-br from-[#0B3B82] via-[#1354B2] to-[#1D70E8] hover:-translate-y-0.5 hover:brightness-105 text-white rounded-2xl p-5 sm:p-6 shadow-[0_14px_30px_-10px_rgba(11,59,130,0.6)] transition-all duration-200 border border-white/20 flex flex-col justify-between"
                 >
-                  <div className="min-w-0">
-                    <p className="text-xs sm:text-sm font-semibold text-white/95">
-                      Tamu Hari Ini
-                    </p>
-                    <p className="mt-1.5 tabular-nums text-3xl font-bold leading-none">
-                      {stats.totalToday}
-                    </p>
-                    <p className="mt-1.5 text-xs text-white/85">
-                      {formatShortDate(getTodayWib())}
-                    </p>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-white/90">
+                        Total Tamu Hari Ini
+                      </p>
+                      <p className="mt-2 tabular-nums text-4xl font-extrabold leading-none tracking-tight">
+                        {stats.totalToday}
+                      </p>
+                    </div>
+                    <div className="w-11 h-11 rounded-xl bg-white/15 border border-white/20 flex items-center justify-center shrink-0">
+                      <UserCheck className="w-5 h-5 text-white" aria-hidden="true" />
+                    </div>
                   </div>
-                  <UserCheck className="w-10 h-10 sm:w-11 sm:h-11 text-white/85 shrink-0" aria-hidden="true" />
+                  <p className="mt-2.5 text-xs sm:text-sm font-medium text-white/95">
+                    {formatShortDate(getTodayWib())}
+                  </p>
+                  <div className="my-3 border-t border-white/20" />
+                  <p className="text-xs text-white/85 leading-relaxed">
+                    Akumulasi tamu yang tercatat hadir pada tanggal hari ini.
+                  </p>
                 </button>
 
-                {/* 2. Tamu Sedang Berkunjung Hari Ini - Oranye Cerah */}
+                {/* 2. Tamu Sedang Berkunjung Hari Ini - Oranye Profesional */}
                 <button
                   type="button"
                   onClick={() => {
@@ -501,21 +509,31 @@ export function AdminDashboard({
                     }
                     setStatusFilter('Sedang Berkunjung');
                   }}
-                  className="text-left bg-gradient-to-br from-[#EA580C] to-[#C2410C] hover:brightness-105 text-white rounded-xl p-4 sm:p-5 shadow-lg transition-all flex items-center justify-between gap-4 border border-white/15"
+                  className="text-left bg-gradient-to-br from-[#C84604] via-[#EA580C] to-[#F97316] hover:-translate-y-0.5 hover:brightness-105 text-white rounded-2xl p-5 sm:p-6 shadow-[0_14px_30px_-10px_rgba(200,70,4,0.55)] transition-all duration-200 border border-white/20 flex flex-col justify-between"
                 >
-                  <div className="min-w-0">
-                    <p className="text-xs sm:text-sm font-semibold text-white/95">
-                      Sedang Berkunjung
-                    </p>
-                    <p className="mt-1.5 tabular-nums text-3xl font-bold leading-none">
-                      {todayActive}
-                    </p>
-                    <p className="mt-1.5 text-xs text-white/85">Belum Check-Out hari ini</p>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-white/90">
+                        Sedang Berkunjung
+                      </p>
+                      <p className="mt-2 tabular-nums text-4xl font-extrabold leading-none tracking-tight">
+                        {todayActive}
+                      </p>
+                    </div>
+                    <div className="w-11 h-11 rounded-xl bg-white/15 border border-white/20 flex items-center justify-center shrink-0">
+                      <Clock className="w-5 h-5 text-white" aria-hidden="true" />
+                    </div>
                   </div>
-                  <Clock className="w-10 h-10 sm:w-11 sm:h-11 text-white/85 shrink-0" aria-hidden="true" />
+                  <p className="mt-2.5 text-xs sm:text-sm font-medium text-white/95">
+                    Belum Check-Out hari ini
+                  </p>
+                  <div className="my-3 border-t border-white/20" />
+                  <p className="text-xs text-white/85 leading-relaxed">
+                    Tamu yang masih berada di area layanan dan menunggu Check-Out.
+                  </p>
                 </button>
 
-                {/* 3. Sudah Check-Out Hari Ini - Hijau Cerah */}
+                {/* 3. Sudah Check-Out Hari Ini - Hijau Profesional */}
                 <button
                   type="button"
                   onClick={() => {
@@ -524,18 +542,28 @@ export function AdminDashboard({
                     }
                     setStatusFilter('Selesai');
                   }}
-                  className="text-left bg-gradient-to-br from-[#28A745] to-[#1E7E34] hover:brightness-105 text-white rounded-xl p-4 sm:p-5 shadow-lg transition-all flex items-center justify-between gap-4 border border-white/15"
+                  className="text-left bg-gradient-to-br from-[#057A50] via-[#0B9966] to-[#13B87E] hover:-translate-y-0.5 hover:brightness-105 text-white rounded-2xl p-5 sm:p-6 shadow-[0_14px_30px_-10px_rgba(5,122,80,0.55)] transition-all duration-200 border border-white/20 flex flex-col justify-between"
                 >
-                  <div className="min-w-0">
-                    <p className="text-xs sm:text-sm font-semibold text-white/95">
-                      Sudah Check-Out
-                    </p>
-                    <p className="mt-1.5 tabular-nums text-3xl font-bold leading-none">
-                      {todayDone}
-                    </p>
-                    <p className="mt-1.5 text-xs text-white/85">Selesai kunjungan hari ini</p>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-white/90">
+                        Sudah Check-Out
+                      </p>
+                      <p className="mt-2 tabular-nums text-4xl font-extrabold leading-none tracking-tight">
+                        {todayDone}
+                      </p>
+                    </div>
+                    <div className="w-11 h-11 rounded-xl bg-white/15 border border-white/20 flex items-center justify-center shrink-0">
+                      <CheckCircle2 className="w-5 h-5 text-white" aria-hidden="true" />
+                    </div>
                   </div>
-                  <CheckCircle2 className="w-10 h-10 sm:w-11 sm:h-11 text-white/85 shrink-0" aria-hidden="true" />
+                  <p className="mt-2.5 text-xs sm:text-sm font-medium text-white/95">
+                    Selesai kunjungan hari ini
+                  </p>
+                  <div className="my-3 border-t border-white/20" />
+                  <p className="text-xs text-white/85 leading-relaxed">
+                    Kunjungan telah selesai dan terverifikasi Check-Out di sistem.
+                  </p>
                 </button>
               </section>
             );
@@ -645,30 +673,45 @@ export function AdminDashboard({
                     </div>
 
                     {/* 3-Column Compact Metric Strip for Selected Recap Period */}
-                    <div className="grid grid-cols-3 gap-2.5 sm:gap-4">
-                      <div className="rounded-xl bg-gradient-to-br from-[#007BFF] to-[#0056CC] text-white p-3 sm:p-4 shadow-sm">
-                        <p className="text-[11px] sm:text-xs font-semibold text-white/90">
-                          Jumlah Tamu
-                        </p>
-                        <p className="mt-1 text-2xl sm:text-3xl font-bold tabular-nums leading-none">
-                          {activeRecapItem.total}
-                        </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
+                      <div className="rounded-2xl bg-gradient-to-br from-[#0B3B82] via-[#1354B2] to-[#1D70E8] text-white p-4 sm:p-5 shadow-md border border-white/15 flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-[11px] font-bold uppercase tracking-wider text-white/90">
+                            Jumlah Tamu
+                          </p>
+                          <p className="mt-1.5 text-3xl font-extrabold tabular-nums leading-none">
+                            {activeRecapItem.total}
+                          </p>
+                        </div>
+                        <div className="w-9 h-9 rounded-xl bg-white/15 border border-white/20 flex items-center justify-center shrink-0">
+                          <Users className="w-4 h-4 text-white" aria-hidden="true" />
+                        </div>
                       </div>
-                      <div className="rounded-xl bg-gradient-to-br from-[#EA580C] to-[#C2410C] text-white p-3 sm:p-4 shadow-sm">
-                        <p className="text-[11px] sm:text-xs font-semibold text-white/90">
-                          Berkunjung
-                        </p>
-                        <p className="mt-1 text-2xl sm:text-3xl font-bold tabular-nums leading-none">
-                          {activeRecapItem.active}
-                        </p>
+                      <div className="rounded-2xl bg-gradient-to-br from-[#C84604] via-[#EA580C] to-[#F97316] text-white p-4 sm:p-5 shadow-md border border-white/15 flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-[11px] font-bold uppercase tracking-wider text-white/90">
+                            Berkunjung
+                          </p>
+                          <p className="mt-1.5 text-3xl font-extrabold tabular-nums leading-none">
+                            {activeRecapItem.active}
+                          </p>
+                        </div>
+                        <div className="w-9 h-9 rounded-xl bg-white/15 border border-white/20 flex items-center justify-center shrink-0">
+                          <Clock className="w-4 h-4 text-white" aria-hidden="true" />
+                        </div>
                       </div>
-                      <div className="rounded-xl bg-gradient-to-br from-[#28A745] to-[#1E7E34] text-white p-3 sm:p-4 shadow-sm">
-                        <p className="text-[11px] sm:text-xs font-semibold text-white/90">
-                          Selesai
-                        </p>
-                        <p className="mt-1 text-2xl sm:text-3xl font-bold tabular-nums leading-none">
-                          {activeRecapItem.done}
-                        </p>
+                      <div className="rounded-2xl bg-gradient-to-br from-[#057A50] via-[#0B9966] to-[#13B87E] text-white p-4 sm:p-5 shadow-md border border-white/15 flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-[11px] font-bold uppercase tracking-wider text-white/90">
+                            Selesai
+                          </p>
+                          <p className="mt-1.5 text-3xl font-extrabold tabular-nums leading-none">
+                            {activeRecapItem.done}
+                          </p>
+                        </div>
+                        <div className="w-9 h-9 rounded-xl bg-white/15 border border-white/20 flex items-center justify-center shrink-0">
+                          <CheckCircle2 className="w-4 h-4 text-white" aria-hidden="true" />
+                        </div>
                       </div>
                     </div>
                   </div>

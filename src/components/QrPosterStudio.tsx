@@ -153,7 +153,7 @@ export function QrPosterStudio({ onPrintPoster }: QrPosterStudioProps) {
         ]);
       }
 
-      const geoFont = "'Plus Jakarta Sans', 'Outfit', 'Poppins', sans-serif";
+      const geoFont = "'Poppins', 'Plus Jakarta Sans', sans-serif";
 
       // Centered Header text
       ctx.textAlign = 'center';

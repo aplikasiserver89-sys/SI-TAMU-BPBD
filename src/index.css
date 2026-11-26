@@ -1,9 +1,9 @@
 @import "tailwindcss";
 
 @theme {
-  --font-display: 'Plus Jakarta Sans', 'Outfit', 'Poppins', 'Century Gothic', 'Futura', sans-serif;
-  --font-sans: 'Plus Jakarta Sans', 'Outfit', 'Poppins', 'Century Gothic', 'Futura', sans-serif;
-  --font-mono: 'Plus Jakarta Sans', 'Outfit', 'Poppins', 'Century Gothic', 'Futura', sans-serif;
+  --font-display: 'Poppins', 'Plus Jakarta Sans', sans-serif;
+  --font-sans: 'Poppins', 'Plus Jakarta Sans', sans-serif;
+  --font-mono: 'Poppins', 'Plus Jakarta Sans', sans-serif;
   --color-bpbd-navy: #0F294A;
   --color-bpbd-navy-deep: #08172C;
   --color-bpbd-orange: #EA580C;
@@ -19,7 +19,7 @@
   textarea,
   code,
   pre {
-    font-family: 'Plus Jakarta Sans', 'Outfit', 'Poppins', 'Century Gothic', 'Futura', sans-serif;
+    font-family: 'Poppins', 'Plus Jakarta Sans', sans-serif;
   }
 
   body {
@@ -28,7 +28,8 @@
   }
 
   h1, h2, h3, h4, .font-display {
-    font-family: 'Outfit', 'Plus Jakarta Sans', 'Poppins', 'Century Gothic', 'Futura', sans-serif;
+    font-family: 'Poppins', 'Plus Jakarta Sans', sans-serif;
+    letter-spacing: -0.015em;
   }
 
   .tabular-nums {
